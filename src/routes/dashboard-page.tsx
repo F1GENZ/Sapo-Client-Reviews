@@ -1,92 +1,133 @@
-import { Badge, Button, Card, Descriptions, Result, Space, Typography } from 'antd';
-import { useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { logout, type SessionProbeResponse } from '../api/auth-api';
+import { Card, Col, Row, Skeleton, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import {
+  CommentOutlined, MessageOutlined, PercentageOutlined, StarFilled,
+} from '@ant-design/icons';
 import { AuthGate } from '../components/auth/auth-gate';
-import { clearStoredDomain } from '../lib/store-context';
-import { reportError } from '../lib/error-reporter';
+import { fetchDashboardOverview } from '../api/dashboard-api';
+import { getErrorMessage } from '../lib/get-error-message';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text } = Typography;
 
-const statusColor = (status: string): 'success' | 'warning' | 'error' | 'default' => {
-  if (status === 'active' || status === 'trial' || status === 'free') return 'success';
-  if (status === 'canceled' || status === 'expired' || status === 'needs_reinstall' || status === 'declined') return 'warning';
-  if (status === 'uninstalled') return 'error';
-  return 'default';
+type DashboardData = {
+  totalReviews: number;
+  avgRating: number;
+  totalQuestions: number;
+  responseRate: number;
+  recentReviews: Array<{
+    reviewId: string;
+    productTitle?: string;
+    author: string;
+    rating: number;
+    content: string;
+    status: string;
+    createdAt: number;
+  }>;
+  recentQuestions: Array<{
+    questionId: string;
+    productTitle?: string;
+    author: string;
+    question: string;
+    status: string;
+    createdAt: number;
+  }>;
 };
 
-const webhookColor = (status: string): 'success' | 'processing' | 'warning' | 'error' | 'default' => {
-  if (status === 'registered') return 'success';
-  if (status === 'pending') return 'processing';
-  if (status === 'degraded') return 'warning';
-  if (status === 'failed') return 'error';
-  return 'default';
+const STATUS_COLOR: Record<string, string> = {
+  pending: 'gold',
+  approved: 'green',
+  hidden: 'default',
+  spam: 'red',
 };
 
-const DashboardContent = ({ session }: { session: SessionProbeResponse }) => {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
+export const DashboardContent = () => {
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['dashboard-overview'],
+    queryFn: () => fetchDashboardOverview() as Promise<DashboardData>,
+  });
 
-  const handleLogout = async (): Promise<void> => {
-    try {
-      await logout();
-    } catch (error) {
-      reportError('logout', error);
-    } finally {
-      clearStoredDomain();
-      queryClient.clear();
-      navigate('/install/login', { replace: true });
-    }
-  };
+  if (isLoading) {
+    return (
+      <Space direction="vertical" size="large" className="full-width-space">
+        <Skeleton active paragraph={{ rows: 2 }} />
+        <Skeleton active paragraph={{ rows: 4 }} />
+      </Space>
+    );
+  }
+
+  if (isError) {
+    return <Text type="danger">{getErrorMessage(error)}</Text>;
+  }
+
+  const overview = data!;
+
+  const reviewCols = [
+    { title: 'Product', dataIndex: 'productTitle', key: 'product', ellipsis: true, render: (t: string | undefined) => t || '-' },
+    { title: 'Author', dataIndex: 'author', key: 'author', width: 120 },
+    { title: 'Rating', dataIndex: 'rating', key: 'rating', width: 80, render: (r: number) => `${r}/5` },
+    { title: 'Content', dataIndex: 'content', key: 'content', ellipsis: true, width: 220 },
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 100, render: (s: string) => <Tag color={STATUS_COLOR[s] || 'default'}>{s}</Tag> },
+  ];
+
+  const qnaCols = [
+    { title: 'Product', dataIndex: 'productTitle', key: 'product', ellipsis: true, render: (t: string | undefined) => t || '-' },
+    { title: 'Author', dataIndex: 'author', key: 'author', width: 120 },
+    { title: 'Question', dataIndex: 'question', key: 'question', ellipsis: true, width: 280 },
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 100, render: (s: string) => <Tag color={STATUS_COLOR[s] || 'default'}>{s}</Tag> },
+  ];
 
   return (
     <Space direction="vertical" size="large" className="full-width-space">
-      <Card>
-        <Space direction="vertical" size="middle" className="full-width-space">
-          <div>
-            <Title level={2}>Protected dashboard</Title>
-            <Paragraph>
-              This page is intentionally minimal. It proves the server-side app session, store domain match, and guarded token resolution without trusting local browser flags.
-            </Paragraph>
-          </div>
-          <Descriptions bordered column={{ xs: 1, sm: 1, md: 2 }}>
-            <Descriptions.Item label="Store Domain">
-              <Text copyable>{session.storeDomain}</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="Shop domain">
-              {session.shopDomain || 'Not resolved'}
-            </Descriptions.Item>
-            <Descriptions.Item label="Install status">
-              <Badge status={statusColor(session.status)} text={session.status} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Plan">
-              {session.plan}
-            </Descriptions.Item>
-            <Descriptions.Item label="Webhook status" span={2}>
-              <Badge status={webhookColor(session.webhookStatus)} text={session.webhookStatus} />
-            </Descriptions.Item>
-          </Descriptions>
-          <Space wrap>
-            <Button onClick={() => void queryClient.invalidateQueries({ queryKey: ['session-probe'] })}>
-              Refresh session probe
-            </Button>
-            <Button danger onClick={() => void handleLogout()}>
-              Clear app session
-            </Button>
-          </Space>
-        </Space>
+      <Row gutter={[16, 16]}>
+        <Col xs={12} sm={6}>
+          <Card>
+            <Statistic title="Total Reviews" value={overview.totalReviews} prefix={<CommentOutlined />} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card>
+            <Statistic title="Average Rating" value={overview.avgRating} precision={1} prefix={<StarFilled style={{ color: '#faad14' }} />} suffix="/5" />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card>
+            <Statistic title="Questions" value={overview.totalQuestions} prefix={<MessageOutlined />} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card>
+            <Statistic title="Response Rate" value={overview.responseRate} suffix="%" precision={0} prefix={<PercentageOutlined />} />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card title="Recent Reviews">
+        <Table
+          rowKey="reviewId"
+          columns={reviewCols}
+          dataSource={overview.recentReviews}
+          pagination={false}
+          size="small"
+          scroll={{ x: 600 }}
+        />
       </Card>
-      <Result
-        status="info"
-        title="Lifecycle MVP only"
-        subTitle="Add app-specific menus after the OAuth, session, webhook, subscription, and uninstall lifecycle is verified for a real app."
-      />
+
+      <Card title="Recent Questions">
+        <Table
+          rowKey="questionId"
+          columns={qnaCols}
+          dataSource={overview.recentQuestions}
+          pagination={false}
+          size="small"
+          scroll={{ x: 600 }}
+        />
+      </Card>
     </Space>
   );
 };
 
 export const DashboardPage = () => (
   <AuthGate>
-    {(session) => <DashboardContent session={session} />}
+    {() => <DashboardContent />}
   </AuthGate>
 );

@@ -23,7 +23,7 @@ export type SessionProbeResponse = {
   storeDomain: string;
   shopDomain?: string;
   status: string;
-  plan: string;
+  featuresUnlocked: boolean;
   webhookStatus: string;
 };
 
@@ -49,17 +49,8 @@ export const startLogin = async (input: { storeDomain?: string | null; redirectT
   return data;
 };
 
-export const processLoginCallback = async (code: string, state: string | null): Promise<AuthFlowResponse> => {
-  const { data } = await apiClient.get<AuthFlowResponse>('/oauth/install/login/callback', {
-    params: { code, ...(state ? { state } : {}) },
-  });
-  return data;
-};
-
 export const processGrandserviceCallback = async (code: string, state: string | null): Promise<HandoffResponse> => {
-  const { data } = await apiClient.get<HandoffResponse>('/oauth/install/grandservice', {
-    params: { code, ...(state ? { state } : {}) },
-  });
+  const { data } = await apiClient.post<HandoffResponse>('/oauth/install/callback', { code, ...(state ? { state } : {}) });
   return data;
 };
 

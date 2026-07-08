@@ -5,7 +5,7 @@ import {
   exchangeSession,
   isAuthStartResponse,
   isHandoffResponse,
-  processLoginCallback,
+  processGrandserviceCallback,
   startLogin,
   verifyLaunchHmac,
   type AuthFlowResponse,
@@ -91,7 +91,7 @@ export const InstallLoginPage = () => {
             title: 'Completing secure login…',
             detail: 'Verifying OAuth state and exchanging the callback code on the server.',
           });
-          const response = await processLoginCallback(params.get('code') || '', params.get('state'));
+          const response = await processGrandserviceCallback(params.get('code') || '', params.get('state'));
           await exchangeAndRedirect(response);
           return;
         }

@@ -1,0 +1,47 @@
+.admin-layout {
+  min-height: 100vh;
+}
+
+.admin-sider {
+  background: #fff;
+  border-right: 1px solid rgba(23, 32, 51, 0.08);
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-sider-brand {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid rgba(23, 32, 51, 0.06);
+}
+
+.admin-sider-brand strong {
+  font-size: 1.05rem;
+}
+
+.admin-sider-menu {
+  flex: 1;
+  border-inline-end: none !important;
+}
+
+.admin-sider-footer {
+  padding: 1rem;
+  border-top: 1px solid rgba(23, 32, 51, 0.06);
+}
+
+.admin-header {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 1.5rem;
+  height: 56px;
+  line-height: 56px;
+}
+
+.admin-content {
+  padding: 1.5rem;
+  background: #eef3fb;
+  min-height: 0;
+}
