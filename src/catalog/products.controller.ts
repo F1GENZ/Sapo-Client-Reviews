@@ -61,7 +61,7 @@ export class ProductsController {
     const install = await this.prisma.appInstall.findUnique({
       where: { storeDomain },
       select: { shopId: true },
-    }).catch(() => null);
+    });
     if (!install?.shopId) throw new NotFoundException('Store install not found');
     return install.shopId;
   }

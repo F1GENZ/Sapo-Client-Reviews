@@ -11,20 +11,23 @@ export class StorefrontService {
   ) {}
 
   async writeStorefrontConfig(storeDomain: string, accessToken: string): Promise<void> {
-    const config = { apiUrl: this.env.API_BASE_URL.replace(/\/+$/, ''), storeDomain };
-    const value = JSON.stringify(config);
+    const apiUrl = this.env.API_BASE_URL.replace(/\/+$/, '');
+    const desired: Array<{ key: string; value: string }> = [
+      { key: 'config', value: JSON.stringify({ apiUrl, storeDomain }) },
+      { key: 'api_url', value: apiUrl },
+      { key: 'store_domain', value: storeDomain },
+    ];
 
-    // Try to find existing metafield to update, otherwise create.
-    // Read failures are NOT "missing config" - surface them so transient errors
-    // are visible instead of being masked by an unconditional create.
     const existing = await this.sapoApi.getMetafields(storeDomain, accessToken, 'shop');
-    const configMf = existing.find((m) => m.namespace === 'f1genz' && m.key === 'config');
-    if (configMf) {
-      await this.sapoApi.updateMetafield(storeDomain, accessToken, String(configMf.id), { value, value_type: 'string' });
-    } else {
-      await this.sapoApi.createMetafield(storeDomain, accessToken, {
-        namespace: 'f1genz', key: 'config', value, value_type: 'string', owner_resource: 'shop',
-      });
+    for (const { key, value } of desired) {
+      const current = existing.find((m) => m.namespace === 'f1genz' && m.key === key);
+      if (current) {
+        await this.sapoApi.updateMetafield(storeDomain, accessToken, String(current.id), { value, value_type: 'string' });
+      } else {
+        await this.sapoApi.createMetafield(storeDomain, accessToken, {
+          namespace: 'f1genz', key, value, value_type: 'string', owner_resource: 'shop',
+        });
+      }
     }
   }
 }

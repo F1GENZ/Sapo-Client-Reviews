@@ -1,4 +1,4 @@
-import Link from "../../components/OrgLink";
+import Link from "../../components/StoreLink";
 import AdminLayout from "../../components/layout/AdminLayout";
 import {
   Alert,

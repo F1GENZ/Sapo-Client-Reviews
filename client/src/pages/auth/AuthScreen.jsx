@@ -4,6 +4,7 @@ const AuthScreen = ({
   message = "Vui lòng chờ trong giây lát.",
   actionLabel,
   onAction,
+  children,
 }) => {
   const isLoading = status === "loading";
 
@@ -26,6 +27,7 @@ const AuthScreen = ({
             {actionLabel}
           </button>
         ) : null}
+        {children}
       </section>
     </main>
   );

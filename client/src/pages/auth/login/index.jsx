@@ -1,250 +1,163 @@
 import { useEffect, useRef, useState } from "react";
 import { authService } from "../../../common/AuthService";
-import { exchangeHandoff } from "../../../common/ApiService";
 import {
-  extractAuthFromRedirect,
+  completeHandoff,
   getAuthenticatedRedirect,
-  isInternalLoginRedirect,
-  redirectIfChanged,
-  stripCallbackParams,
+  navigateTopLevel,
+  parseStoreDomainInput,
 } from "../../../common/authFlow";
-import { getErrorMessage } from "../../../common/getErrorMessage";
 import {
-  getActiveOrgid,
-  getOrgid,
+  getActiveStoreDomain,
+  getStoreDomain,
   isAuthVerified,
-  setAuthSession,
   syncAuthSession,
 } from "../../../common/AuthStorage";
-import { resetClientCache } from "../../../common/queryClient";
 import AuthScreen from "../AuthScreen";
 
+const PENDING_TIMEOUT_MS = 12000;
+
+const NOTICES = {
+  session_expired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại bằng tên cửa hàng.",
+  handoff_failed:
+    "Không tạo được phiên đăng nhập. Vui lòng mở lại ứng dụng từ trang quản trị Sapo hoặc đăng nhập bằng tên cửa hàng.",
+  launch_invalid:
+    "Liên kết khởi chạy từ Sapo không hợp lệ hoặc đã hết hạn. Vui lòng mở lại ứng dụng từ trang quản trị Sapo hoặc đăng nhập bằng tên cửa hàng.",
+  launch_failed:
+    "Không xác thực được yêu cầu khởi chạy từ Sapo. Vui lòng thử lại hoặc đăng nhập bằng tên cửa hàng.",
+  timeout: "Xác thực mất quá lâu. Vui lòng kiểm tra kết nối và thử lại.",
+  blocked:
+    "Không chuyển được sang trang xác thực của Sapo. Vui lòng thử lại hoặc mở ứng dụng từ trang quản trị Sapo.",
+  unknown: "Không thể xác thực. Vui lòng thử lại.",
+};
+
+const getInitialNotice = (params) => {
+  const code = params.get("error");
+  if (!code) return "";
+  return NOTICES[code] || NOTICES.unknown;
+};
+
+const getEntryErrorMessage = (error) => {
+  const status = error?.response?.status;
+  if (status === 400) {
+    return "Tên cửa hàng không hợp lệ. Vui lòng nhập dạng ten-cua-hang hoặc ten-cua-hang.mysapo.net.";
+  }
+  if (status === 429) return "Bạn thao tác quá nhanh. Vui lòng đợi một lát rồi thử lại.";
+  return "Không thể kết nối đến dịch vụ xác thực. Vui lòng thử lại.";
+};
+
 const Login = () => {
-  const [authError, setAuthError] = useState("");
-  const [timedOut, setTimedOut] = useState(false);
+  const params = new URLSearchParams(window.location.search);
+  const isLaunch = params.has("hmac");
+  const [phase, setPhase] = useState(isLaunch ? "verifying" : "form");
+  const [notice, setNotice] = useState(() => getInitialNotice(params));
+  const [formError, setFormError] = useState("");
+  const [storeInput, setStoreInput] = useState(
+    () => params.get("store") || params.get("storeDomain") || getActiveStoreDomain() || "",
+  );
   const startedRef = useRef(false);
 
-  const activateOrgSession = async (orgid, sessionToken) => {
-    const previousOrgid = getActiveOrgid();
-    if (previousOrgid && previousOrgid !== orgid) {
-      await resetClientCache();
-    }
-    setAuthSession(orgid, sessionToken);
-  };
-
-  const persistAuthSession = async (redirectUrl, fallbackOrgid, fallbackToken) => {
-    const auth = extractAuthFromRedirect(redirectUrl, fallbackOrgid, fallbackToken);
-    if (auth) {
-      await activateOrgSession(auth.orgid, auth.sessionToken);
-      return auth;
-    }
-    return null;
-  };
-
-  const authenticateAndRedirect = async (orgid, sessionToken) => {
-    if (!sessionToken) {
-      startAuthEntry(orgid);
-      return;
-    }
-    await activateOrgSession(orgid, sessionToken);
-    window.location.href = getAuthenticatedRedirect(orgid);
-  };
-
-  const exchangeHandoffInLogin = async (orgid, handoff) => {
-    try {
-      const result = await exchangeHandoff(handoff);
-      if (result?.ok && result?.storeDomain && result?.sessionToken) {
-        await authenticateAndRedirect(result.storeDomain, result.sessionToken);
-        return;
-      }
-      setAuthError("Khong tao duoc phien dang nhap. Vui long mo lai app tu Haravan va thu lai.");
-    } catch (error) {
-      setAuthError(getErrorMessage(error, "Xac thuc that bai. Vui long thu lai."));
-    }
-  };
-
-  const startLegacyLogin = (orgidParam, shopParam) => {
-    authService
-      .login(orgidParam || "", shopParam || "")
-      .then((response) => {
-        if (response.status === 200 && response.data) {
-          redirectIfChanged(response.data);
-          return;
-        }
-
-        setAuthError("Khong the khoi tao dang nhap Haravan.");
-      })
-      .catch((error) => {
-        setAuthError(getErrorMessage(error, "Khong the ket noi den dich vu xac thuc."));
-      });
-  };
-
-  const startAuthEntry = (orgidParam, shopParam) => {
-    authService
-      .entry(orgidParam || "", shopParam || "")
-      .then(async (response) => {
-        const entry = response.data || {};
-        if (entry.status === "ready" && entry.orgid && entry.sessionToken) {
-          await authenticateAndRedirect(entry.orgid, entry.sessionToken);
-          return;
-        }
-        if (entry.url) {
-          redirectIfChanged(entry.url);
-          return;
-        }
-        setAuthError(entry.reason || "Khong the khoi tao dang nhap Haravan.");
-      })
-      .catch((error) => {
-        if (error.response?.status === 404) {
-          startLegacyLogin(orgidParam, shopParam);
-          return;
-        }
-        setAuthError(getErrorMessage(error, "Khong the ket noi den dich vu xac thuc."));
-      });
+  const backToForm = (nextNotice) => {
+    setNotice(nextNotice);
+    setPhase("form");
   };
 
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-    const hmac = params.get("hmac");
-    const state = params.get("state");
-    const idToken = params.get("id_token");
-    const authCallback = params.get("auth_callback");
-    const errorCode = params.get("error");
-    const errorMessage = params.get("message");
-    const orgidParam = params.get("orgid") || getOrgid();
-    const shopParam = params.get("shop");
-
-    if (errorCode) {
-      if (errorCode === "install_failed") {
-        setAuthError("Cai dat app that bai. Vui long mo lai app tu Haravan va thu lai.");
-        return;
-      }
-
-      if (errorCode === "oauth_callback_failed") {
-        setAuthError(errorMessage || "Xac thuc OAuth that bai. Vui long thu lai.");
-        return;
-      }
-
-      setAuthError(errorMessage || "Khong the xac thuc. Vui long thu lai.");
-      return;
-    }
-
-    const sessionTokenParam = params.get("session_token");
-    const handoffParam = params.get("handoff_code");
-
-    if (orgidParam && sessionTokenParam) {
-      void authenticateAndRedirect(orgidParam, sessionTokenParam);
-      return;
-    }
-
-    if (orgidParam && handoffParam) {
-      void exchangeHandoffInLogin(orgidParam, handoffParam);
-      return;
-    }
-
-    syncAuthSession();
-    const storedOrgid = getOrgid();
-    if (!code && !hmac && isAuthVerified() && storedOrgid && (!orgidParam || orgidParam === storedOrgid)) {
-      redirectIfChanged(getAuthenticatedRedirect(storedOrgid), { replace: true });
-      return;
-    }
-
-    if (!code && !hmac && authCallback === "1") {
-      setAuthError("Khong tao duoc phien dang nhap. Vui long mo lai app tu Haravan va thu lai.");
-      return;
-    }
-
-    if (hmac && !code) {
+    if (isLaunch) {
+      // The raw query is forwarded untouched: the hmac signs it byte for byte.
       authService
-        .verifyHmac(window.location.search.replace(/^\?/, ""))
-        .then((response) => {
-          if (response.data?.valid && response.data?.orgid && response.data?.sessionToken) {
-            void authenticateAndRedirect(response.data.orgid, response.data.sessionToken);
-          } else {
-            startAuthEntry(orgidParam, shopParam);
-          }
-        })
-        .catch(() => {
-          startAuthEntry(orgidParam, shopParam);
-        });
-      return;
-    }
-
-    if (code) {
-      stripCallbackParams({ markAuthCallback: true });
-      authService
-        .verifyLogin({
-          code,
-          ...(state ? { state } : {}),
-          ...(idToken ? { id_token: idToken } : {}),
-        })
-        .then(async (response) => {
-          if (response.data?.orgid && response.data?.sessionToken) {
-            await activateOrgSession(response.data.orgid, response.data.sessionToken);
-            redirectIfChanged(getAuthenticatedRedirect(response.data.orgid), { replace: true });
-            return;
-          }
-
-          if (response.data?.url) {
-            const auth = await persistAuthSession(response.data.url, orgidParam, response.data.sessionToken);
-            if (auth) {
-              redirectIfChanged(getAuthenticatedRedirect(auth.orgid), { replace: true });
-              return;
-            }
-            if (isInternalLoginRedirect(response.data.url)) {
-              setAuthError("Khong tao duoc phien dang nhap. Vui long mo lai app tu Haravan va thu lai.");
-              return;
-            }
-            redirectIfChanged(response.data.url, { replace: true });
-            return;
-          }
-
-          setAuthError("Khong nhan duoc URL chuyen huong sau khi xac thuc.");
+        .verifyLaunchQuery(window.location.search)
+        .then(async (body) => {
+          if (!body?.handoffCode) throw new Error("Missing handoff code");
+          const { storeDomain, redirectTo } = await completeHandoff(body.handoffCode);
+          window.location.replace(getAuthenticatedRedirect(storeDomain, redirectTo));
         })
         .catch((error) => {
-          setAuthError(getErrorMessage(error, "Xac thuc OAuth that bai. Vui long thu lai."));
+          backToForm(error?.status === 401 ? NOTICES.launch_invalid : NOTICES.launch_failed);
         });
       return;
     }
 
-    startAuthEntry(orgidParam, shopParam);
+    if (!params.get("error")) {
+      syncAuthSession();
+      const storeDomain = getStoreDomain() || getActiveStoreDomain();
+      if (storeDomain && isAuthVerified(storeDomain)) {
+        window.location.replace(getAuthenticatedRedirect(storeDomain));
+      }
+    }
   }, []);
 
   useEffect(() => {
-    if (authError) return undefined;
-    const timer = setTimeout(() => setTimedOut(true), 12000);
+    if (phase === "form") return undefined;
+    const timer = setTimeout(
+      () => backToForm(phase === "redirecting" ? NOTICES.blocked : NOTICES.timeout),
+      PENDING_TIMEOUT_MS,
+    );
     return () => clearTimeout(timer);
-  }, [authError]);
+  }, [phase]);
 
-  if (authError) {
-    return (
-      <AuthScreen
-        status="error"
-        title="Xac thuc khong thanh cong"
-        message={authError}
-        actionLabel="Thu lai"
-        onAction={() => { window.location.href = "/install/login"; }}
-      />
-    );
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const storeDomain = parseStoreDomainInput(storeInput);
+    if (!storeDomain) {
+      setFormError(
+        "Tên cửa hàng không hợp lệ. Vui lòng nhập dạng ten-cua-hang hoặc ten-cua-hang.mysapo.net.",
+      );
+      return;
+    }
+    setFormError("");
+    setPhase("redirecting");
+    try {
+      const { url } = await authService.entry(storeDomain);
+      if (!url) throw new Error("Missing authorize URL");
+      navigateTopLevel(url);
+    } catch (error) {
+      setFormError(getEntryErrorMessage(error));
+      setPhase("form");
+    }
+  };
+
+  if (phase === "verifying") {
+    return <AuthScreen title="Đang xác thực…" message="Đang xác minh yêu cầu khởi chạy từ Sapo." />;
   }
 
-  if (timedOut) {
-    return (
-      <AuthScreen
-        status="warning"
-        title="Khong the ket noi"
-        message="Xac thuc mat qua lau. Vui long kiem tra ket noi va thu lai."
-        actionLabel="Thu lai"
-        onAction={() => window.location.reload()}
-      />
-    );
+  if (phase === "redirecting") {
+    return <AuthScreen title="Đang chuyển đến Sapo…" message="Vui lòng chờ trong giây lát." />;
   }
 
-  return <AuthScreen />;
+  return (
+    <AuthScreen
+      status={notice ? "error" : "warning"}
+      title={notice ? "Xác thực không thành công" : "Đăng nhập cửa hàng Sapo"}
+      message={notice || "Nhập tên cửa hàng Sapo của bạn để tiếp tục."}
+    >
+      <form className="f1g-auth-form" onSubmit={handleSubmit} noValidate>
+        <label htmlFor="f1g-store-domain">Tên cửa hàng</label>
+        <input
+          id="f1g-store-domain"
+          name="storeDomain"
+          type="text"
+          inputMode="url"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          placeholder="ten-cua-hang.mysapo.net"
+          value={storeInput}
+          onChange={(event) => setStoreInput(event.target.value)}
+          aria-invalid={formError ? "true" : undefined}
+          aria-describedby={formError ? "f1g-store-domain-error" : undefined}
+        />
+        {formError ? (
+          <p id="f1g-store-domain-error" className="f1g-auth-form__error" role="alert">
+            {formError}
+          </p>
+        ) : null}
+        <button type="submit">Tiếp tục</button>
+      </form>
+    </AuthScreen>
+  );
 };
 
 export default Login;

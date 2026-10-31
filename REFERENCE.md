@@ -3,7 +3,7 @@
 **Haravan reference app (read-only):**
 
 ```
-C:\Users\Admin\Desktop\F1GENZ Review
+E:/Work/apps/F1GENZ_Review
 ```
 
 ## Rules

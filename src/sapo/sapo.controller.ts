@@ -58,17 +58,16 @@ export class SapoController {
     );
   }
 
-  private finishAuthFlow(req: Request, res: Response, response: AuthFlowResponse): AuthFlowResponse | undefined {
+  private async finishAuthFlow(req: Request, res: Response, response: AuthFlowResponse): Promise<AuthFlowResponse | undefined> {
     if (!wantsBrowserRedirect(req)) return response;
     if ('url' in response) {
       res.redirect(302, response.url);
       return undefined;
     }
-    this.sessions.setSessionCookie(res, response.storeDomain);
+    const lifecycleGeneration = await this.sapo.getLifecycleGeneration(response.storeDomain);
+    this.sessions.setSessionCookie(res, this.sessions.createSessionToken(response.storeDomain, lifecycleGeneration));
     const target = new URL(response.redirectTo || '/dashboard', this.env.FRONTEND_URL);
-    target.searchParams.set('orgid', response.storeDomain);
-    // One-time, TTL-bounded code — the SPA exchanges it for a session token
-    // via POST /api/auth/session/exchange. Never put the long-lived JWT in the URL.
+    target.searchParams.set('storeDomain', response.storeDomain);
     target.searchParams.set('handoff_code', response.handoffCode);
     res.redirect(302, target.toString());
     return undefined;
@@ -78,13 +77,10 @@ export class SapoController {
   async startLogin(
     @Req() req: Request,
     @Query('storeDomain') storeDomain?: string,
-    @Query('orgid') orgid?: string,
-    @Query('shop') shop?: string,
     @Query('redirect') redirectTo?: string,
   ) {
     await this.assertAuthRate(req, 'oauth-login');
-    const resolvedStore = storeDomain || orgid || shop || undefined;
-    const result = await this.sapo.startLogin({ storeDomain: resolvedStore, redirectTo });
+    const result = await this.sapo.startLogin({ storeDomain: firstQuery(storeDomain), redirectTo: firstQuery(redirectTo) });
     return wantsBrowserRedirect(req) ? result : result.url;
   }
 
@@ -92,13 +88,10 @@ export class SapoController {
   async loginEntry(
     @Req() req: Request,
     @Query('storeDomain') storeDomain?: string,
-    @Query('orgid') orgid?: string,
-    @Query('shop') shop?: string,
     @Query('redirect') redirectTo?: string,
   ) {
     await this.assertAuthRate(req, 'oauth-login');
-    const resolvedStore = storeDomain || orgid || shop || undefined;
-    const result = await this.sapo.startLogin({ storeDomain: resolvedStore, redirectTo });
+    const result = await this.sapo.startLogin({ storeDomain: firstQuery(storeDomain), redirectTo: firstQuery(redirectTo) });
     return { url: result.url, reason: result.reason };
   }
 
@@ -113,8 +106,8 @@ export class SapoController {
     }
 
     const params = this.hmacVerifier.verifyLaunchQuery(rawQuery);
-    const storeDomain = params.get('storeDomain') || undefined;
-    if (!storeDomain) return this.sapo.startLogin({ reason: 'missing_storeDomain' } as never);
+    const storeDomain = params.get('store') || undefined;
+    if (!storeDomain) throw new BadRequestException('Missing store in launch parameters');
     return this.sessions.createHandoff(storeDomain, '/dashboard');
   }
 
@@ -126,7 +119,7 @@ export class SapoController {
     @Query('state') state?: string,
   ) {
     await this.assertAuthRate(req, 'oauth-callback');
-    const response = await this.sapo.processLoginCallback(code || '', state);
+    const response = await this.sapo.processLoginCallback(firstQuery(code) || '', firstQuery(state));
     return this.finishAuthFlow(req, res, response);
   }
 
@@ -138,14 +131,16 @@ export class SapoController {
     @Body('state') state?: string,
   ) {
     await this.assertAuthRate(req, 'oauth-callback');
-    const response = await this.sapo.processLoginCallback(code || '', state);
+    const response = await this.sapo.processLoginCallback(firstQuery(code) || '', firstQuery(state));
     return this.finishAuthFlow(req, res, response);
   }
 
   @Get('/oauth/install/start')
-  async installStart(@Query('storeDomain') storeDomain?: string) {
-    if (!storeDomain) throw new BadRequestException('storeDomain is required');
-    return this.sapo.buildInstallUrl({ storeDomain });
+  async installStart(@Req() req: Request, @Query('storeDomain') storeDomain?: string) {
+    await this.assertAuthRate(req, 'oauth-install-start');
+    const target = firstQuery(storeDomain);
+    if (!target) throw new BadRequestException('storeDomain is required');
+    return this.sapo.buildInstallUrl({ storeDomain: target });
   }
 
   @Get('/oauth/install/callback')
@@ -157,14 +152,16 @@ export class SapoController {
     @Query('store') store?: string,
   ) {
     await this.assertAuthRate(req, 'oauth-install');
-    if (!code) {
-      if (store) {
-        const login = await this.sapo.buildLoginUrl({ storeDomain: store });
+    const authCode = firstQuery(code);
+    if (!authCode) {
+      const storeDomain = firstQuery(store);
+      if (storeDomain) {
+        const login = await this.sapo.buildLoginUrl({ storeDomain });
         return res.redirect(302, login);
       }
       return res.redirect(302, this.env.FRONTEND_URL || '/');
     }
-    const response = await this.sapo.processInstallCallback(code || '', state);
+    const response = await this.sapo.processInstallCallback(authCode, firstQuery(state));
     return this.finishAuthFlow(req, res, response);
   }
 
@@ -176,22 +173,17 @@ export class SapoController {
     @Body('state') state?: string,
   ) {
     await this.assertAuthRate(req, 'oauth-install');
-    const response = await this.sapo.processInstallCallback(code || '', state);
+    const response = await this.sapo.processInstallCallback(firstQuery(code) || '', firstQuery(state));
     return this.finishAuthFlow(req, res, response);
   }
 
   @Get('/oauth/install/webhooks')
   async webhookChallenge(@Res() res: Response) {
-    // Sapo does not use a GET verify-challenge handshake.
-    // Return 200 for health-check compatibility.
     res.status(200).send('ok');
   }
 
   @Post('/oauth/install/webhooks')
   async webhookPost(@Req() req: RawRequest, @Body() body: unknown, @Query() query: Record<string, unknown>, @Headers() headers: Record<string, unknown>) {
-    // Webhooks are HMAC-authenticated and idempotent; Sapo servers share one
-    // source IP, so IP rate limiting here would collapse all stores into one
-    // bucket and drop legitimate webhooks.
     return this.webhooks.handle({ headers, query, body, rawBody: req.rawBody });
   }
 
@@ -211,12 +203,14 @@ export class SapoController {
       throw new UnauthorizedException('Untrusted request origin');
     }
     const handoff = await this.sessions.consumeHandoff(handoffCode);
-    this.sessions.setSessionCookie(res, handoff.storeDomain);
+    const lifecycleGeneration = await this.sapo.getLifecycleGeneration(handoff.storeDomain);
+    const sessionToken = this.sessions.createSessionToken(handoff.storeDomain, lifecycleGeneration);
+    this.sessions.setSessionCookie(res, sessionToken);
     res.json({
       ok: true,
       storeDomain: handoff.storeDomain,
       redirectTo: handoff.redirectTo,
-      sessionToken: this.sessions.createSessionToken(handoff.storeDomain),
+      sessionToken,
     });
   }
 

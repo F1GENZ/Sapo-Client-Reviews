@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
+import { assertEncryptionKey } from '../config/secret-guard';
 
 export type EncryptedToken = {
   ciphertext: string;
@@ -9,19 +10,12 @@ export type EncryptedToken = {
   tag: string;
 };
 
-const decodeKey = (value: string): Buffer => {
-  if (/^[a-f0-9]{64}$/i.test(value)) return Buffer.from(value, 'hex');
-  return Buffer.from(value, 'base64');
-};
-
 @Injectable()
 export class TokenEncryptionService {
   private readonly key: Buffer;
 
   constructor(@Inject(APP_ENV) env: AppEnv) {
-    if (!env.DATA_ENCRYPTION_KEY) throw new Error('DATA_ENCRYPTION_KEY is required');
-    this.key = decodeKey(env.DATA_ENCRYPTION_KEY);
-    if (this.key.length !== 32) throw new Error('DATA_ENCRYPTION_KEY must be 32 bytes');
+    this.key = assertEncryptionKey(env.DATA_ENCRYPTION_KEY);
   }
 
   encrypt(value: string): EncryptedToken {

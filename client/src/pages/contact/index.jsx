@@ -1,4 +1,4 @@
-import Link from "../../components/OrgLink";
+import Link from "../../components/StoreLink";
 import AdminLayout from "../../components/layout/AdminLayout";
 import {
   Alert,
@@ -114,7 +114,7 @@ const ContactPage = () => (
       showIcon
       style={{ marginBottom: 16 }}
       message="Ưu tiên gửi kèm ngữ cảnh"
-      description="Khi báo lỗi, gửi thêm orgid, domain shop, link sản phẩm, ảnh màn hình và bước tái hiện để xử lý nhanh hơn."
+      description="Khi báo lỗi, gửi thêm tên miền cửa hàng (storeDomain, dạng ten-cua-hang.mysapo.net), link sản phẩm, ảnh màn hình và bước tái hiện để xử lý nhanh hơn."
     />
 
     <div

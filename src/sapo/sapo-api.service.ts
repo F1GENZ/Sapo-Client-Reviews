@@ -1,20 +1,16 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { BadRequestException } from '@nestjs/common/exceptions';
+import { BadGatewayException, BadRequestException, UnauthorizedException } from '@nestjs/common/exceptions';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
 import type {
-  GetOrdersParams,
   GetProductsCountParams,
   GetProductsParams,
   OAuthTokenPayload,
-  RunMode,
   SapoListResponse,
   SapoMetafield,
   SapoMetafieldCreatePayload,
   SapoMetafieldUpdatePayload,
-  SapoOrder,
   SapoProduct,
-  SapoScriptTag,
   SapoShop,
   SapoWebhook,
 } from './sapo.types';
@@ -33,6 +29,16 @@ const parseRetryAfterHeader = (headers: Headers): number => {
   return Number.isFinite(parsed) ? parsed : DEFAULT_RETRY_AFTER_SECONDS;
 };
 
+const CALL_LIMIT_HEADROOM = 4;
+const CALL_LIMIT_LEAK_PER_SECOND = 2;
+
+export const callLimitPauseMs = (headers: Headers): number => {
+  const match = /^(\d+)\/(\d+)$/.exec((headers.get('x-sapo-api-call-limit') || '').trim());
+  if (!match) return 0;
+  const excess = Number(match[1]) - (Number(match[2]) - CALL_LIMIT_HEADROOM);
+  return excess > 0 ? Math.ceil(excess / CALL_LIMIT_LEAK_PER_SECOND) * 1000 : 0;
+};
+
 const assertNumericId = (value: string, label: string): void => {
   if (!NUMERIC_ID_REGEX.test(value)) {
     throw new BadRequestException(`Invalid ${label}: must be numeric`);
@@ -40,9 +46,13 @@ const assertNumericId = (value: string, label: string): void => {
 };
 
 interface PerStoreLimiter {
-  foreground: { inflight: number; waitQueue: Array<() => void>; cooldownUntil: number };
-  background: { inflight: number; waitQueue: Array<() => void>; cooldownUntil: number; nextRequestAt: number };
+  inflight: number;
+  waitQueue: Array<() => void>;
+  cooldownUntil: number;
 }
+
+const sameWebhookAddress = (a: string, b: string): boolean =>
+  a.trim().replace(/\/+$/, '').toLowerCase() === b.trim().replace(/\/+$/, '').toLowerCase();
 
 @Injectable()
 export class SapoApiService {
@@ -51,99 +61,64 @@ export class SapoApiService {
 
   constructor(@Inject(APP_ENV) private readonly env: AppEnv) {}
 
-  // ─── Per-store limiter ──────────────────────────────────────────
-
   private limiterFor(storeDomain: string): PerStoreLimiter {
     let limiter = this.limiters.get(storeDomain);
     if (!limiter) {
-      limiter = {
-        foreground: { inflight: 0, waitQueue: [], cooldownUntil: 0 },
-        background: { inflight: 0, waitQueue: [], cooldownUntil: 0, nextRequestAt: 0 },
-      };
+      limiter = { inflight: 0, waitQueue: [], cooldownUntil: 0 };
       this.limiters.set(storeDomain, limiter);
     }
     return limiter;
   }
 
-  private acquireSlot(storeDomain: string, bg: boolean): Promise<void> {
+  private acquireSlot(storeDomain: string): Promise<void> {
     const limiter = this.limiterFor(storeDomain);
-    const state = bg ? limiter.background : limiter.foreground;
-    const max = bg ? 1 : this.env.SAPO_API_MAX_CONCURRENT;
-
-    if (state.inflight < max) {
-      state.inflight++;
+    if (limiter.inflight < this.env.SAPO_API_MAX_CONCURRENT) {
+      limiter.inflight++;
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
-      state.waitQueue.push(() => { state.inflight++; resolve(); });
+      limiter.waitQueue.push(() => { limiter.inflight++; resolve(); });
     });
   }
 
-  private releaseSlot(storeDomain: string, bg: boolean): void {
+  private releaseSlot(storeDomain: string): void {
     const limiter = this.limiterFor(storeDomain);
-    const state = bg ? limiter.background : limiter.foreground;
-    state.inflight = Math.max(0, state.inflight - 1);
-    state.waitQueue.shift()?.();
+    limiter.inflight = Math.max(0, limiter.inflight - 1);
+    limiter.waitQueue.shift()?.();
   }
 
-  private extendCooldown(storeDomain: string, bg: boolean, delayMs: number): void {
+  private extendCooldown(storeDomain: string, delayMs: number): void {
     const limiter = this.limiterFor(storeDomain);
-    const state = bg ? limiter.background : limiter.foreground;
-    state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + delayMs);
+    limiter.cooldownUntil = Math.max(limiter.cooldownUntil, Date.now() + delayMs);
   }
 
-  private async waitForCooldown(storeDomain: string, bg: boolean): Promise<void> {
-    const limiter = this.limiterFor(storeDomain);
-    const bgState = limiter.background;
-    const fgState = limiter.foreground;
-    const until = bg
-      ? Math.max(fgState.cooldownUntil, bgState.cooldownUntil)
-      : fgState.cooldownUntil;
-    const delay = until - Date.now();
+  private async waitForCooldown(storeDomain: string): Promise<void> {
+    const delay = this.limiterFor(storeDomain).cooldownUntil - Date.now();
     if (delay > 0) await new Promise((r) => setTimeout(r, delay));
   }
 
-  private async waitForBackgroundWindow(storeDomain: string): Promise<void> {
-    const limiter = this.limiterFor(storeDomain);
-    const state = limiter.background;
-    const interval = this.env.SAPO_API_MIN_INTERVAL_MS;
-    if (interval <= 0) return;
-    const now = Date.now();
-    const scheduledAt = Math.max(now, state.nextRequestAt);
-    state.nextRequestAt = scheduledAt + interval;
-    const delay = scheduledAt - now;
-    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
-  }
-
-  private async throttledRequest<T>(storeDomain: string, bg: boolean, fn: () => Promise<T>): Promise<T> {
+  private async throttledRequest<T>(storeDomain: string, fn: () => Promise<T>): Promise<T> {
     let attempt = 0;
     while (true) {
-      await this.waitForCooldown(storeDomain, bg);
-      if (bg) await this.waitForBackgroundWindow(storeDomain);
-      await this.acquireSlot(storeDomain, bg);
+      await this.waitForCooldown(storeDomain);
+      await this.acquireSlot(storeDomain);
       try {
         return await fn();
       } catch (error: unknown) {
         if (error instanceof ResponseError && error.status === 429 && attempt < MAX_RETRIES) {
           const retryAfter = parseRetryAfterHeader(error.headers);
           const delay = Math.max(retryAfter, 1) * 1000 + attempt * 500;
-          this.extendCooldown(storeDomain, bg, delay);
+          this.extendCooldown(storeDomain, delay);
           this.logger.warn(`Rate limited store=${storeDomain} attempt=${attempt + 1}/${MAX_RETRIES} delay=${delay}ms`);
           attempt++;
         } else {
           throw error;
         }
       } finally {
-        this.releaseSlot(storeDomain, bg);
+        this.releaseSlot(storeDomain);
       }
     }
   }
-
-  runBackground<T>(fn: () => Promise<T>): Promise<T> {
-    return fn();
-  }
-
-  // ─── HTTP helpers ───────────────────────────────────────────────
 
   private buildUrl(storeDomain: string, path: string, params?: URLSearchParams): string {
     const qs = params?.toString();
@@ -159,8 +134,8 @@ export class SapoApiService {
     return params;
   }
 
-  private async fetch(storeDomain: string, accessToken: string, bg: boolean, path: string, init: RequestInit = {}): Promise<Response> {
-    return this.throttledRequest(storeDomain, bg, async () => {
+  private async fetch(storeDomain: string, accessToken: string, path: string, init: RequestInit = {}): Promise<Response> {
+    return this.throttledRequest(storeDomain, async () => {
       const url = this.buildUrl(storeDomain, path);
       const res = await fetch(url, {
         ...init,
@@ -170,6 +145,8 @@ export class SapoApiService {
           ...init.headers,
         },
       });
+      const pauseMs = callLimitPauseMs(res.headers);
+      if (pauseMs > 0) this.extendCooldown(storeDomain, pauseMs);
       if (!res.ok) {
         const err = new ResponseError(res.status, res.headers);
         throw err;
@@ -178,7 +155,20 @@ export class SapoApiService {
     });
   }
 
-  // ─── OAuth ──────────────────────────────────────────────────────
+  private async sendJson(
+    storeDomain: string, accessToken: string, method: 'POST' | 'PUT', path: string, body: unknown, failMessage: string,
+  ): Promise<Response> {
+    try {
+      return await this.fetch(storeDomain, accessToken, path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      if (error instanceof ResponseError) throw new BadRequestException({ message: failMessage, status: error.status });
+      throw error;
+    }
+  }
 
   async exchangeCode(code: string, storeDomain: string): Promise<OAuthTokenPayload> {
     const params = new URLSearchParams({
@@ -192,26 +182,28 @@ export class SapoApiService {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body: params.toString(),
     });
-    if (!res.ok) throw new Error(`Sapo token exchange failed: ${res.status}`);
+    if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) {
+      throw new UnauthorizedException('Sapo rejected the authorization code');
+    }
+    if (!res.ok) {
+      this.logger.warn(`Sapo token exchange failed for ${storeDomain}: HTTP ${res.status}`);
+      throw new BadGatewayException('Sapo token exchange failed');
+    }
     return res.json() as Promise<OAuthTokenPayload>;
   }
 
-  // ─── Shop ───────────────────────────────────────────────────────
-
   async getShop(storeDomain: string, accessToken: string): Promise<SapoShop> {
-    const res = await this.fetch(storeDomain, accessToken, false, '/store.json');
+    const res = await this.fetch(storeDomain, accessToken, '/store.json');
     const payload = await res.json() as { store?: SapoShop; shop?: SapoShop };
     const store = payload.store ?? payload.shop;
     if (!store) throw new BadRequestException('Failed to fetch store info');
     return store;
   }
 
-  // ─── Products ───────────────────────────────────────────────────
-
   async getProducts(storeDomain: string, accessToken: string, params: GetProductsParams = {}): Promise<SapoProduct[]> {
     const qp = this.buildQueryParams(params as Record<string, string | number | boolean | null | undefined>);
     const path = `/products.json${qp.toString() ? '?' + qp.toString() : ''}`;
-    const res = await this.fetch(storeDomain, accessToken, false, path);
+    const res = await this.fetch(storeDomain, accessToken, path);
     const payload = await res.json() as SapoListResponse<SapoProduct>;
     const key = Object.keys(payload).find((k) => Array.isArray(payload[k]));
     return key ? payload[key] : [];
@@ -220,7 +212,7 @@ export class SapoApiService {
   async getProductsCount(storeDomain: string, accessToken: string, params: GetProductsCountParams = {}): Promise<number> {
     const qp = this.buildQueryParams(params as Record<string, string | number | boolean | null | undefined>);
     const path = `/products/count.json${qp.toString() ? '?' + qp.toString() : ''}`;
-    const res = await this.fetch(storeDomain, accessToken, false, path);
+    const res = await this.fetch(storeDomain, accessToken, path);
     const payload = await res.json() as { count?: number };
     if (typeof payload.count !== 'number' || payload.count < 0) {
       throw new BadRequestException('Failed to fetch products count');
@@ -230,13 +222,11 @@ export class SapoApiService {
 
   async getProduct(storeDomain: string, accessToken: string, productId: string): Promise<SapoProduct> {
     assertNumericId(productId, 'productId');
-    const res = await this.fetch(storeDomain, accessToken, false, `/products/${productId}.json`);
+    const res = await this.fetch(storeDomain, accessToken, `/products/${productId}.json`);
     const payload = await res.json() as { product?: SapoProduct };
     if (!payload.product) throw new BadRequestException('Failed to fetch product');
     return payload.product;
   }
-
-  // ─── Product Metafields ─────────────────────────────────────────
 
   async getProductMetafields(storeDomain: string, accessToken: string, productId: string, namespace?: string): Promise<SapoMetafield[]> {
     assertNumericId(productId, 'productId');
@@ -252,19 +242,9 @@ export class SapoApiService {
     metafield: { namespace: string; key: string; value: string | number; value_type: string },
   ): Promise<SapoMetafield> {
     assertNumericId(productId, 'productId');
-    const url = this.buildUrl(storeDomain, `/products/${productId}/metafields.json`);
-    const res = await this.throttledRequest(storeDomain, false, async () => {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'X-Sapo-Access-Token': accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ metafield }),
-      });
-      if (!r.ok) {
-        const detail = await r.text().catch(() => '');
-        throw new BadRequestException({ message: 'Sapo create product metafield failed', status: r.status, detail });
-      }
-      return r;
-    });
+    const res = await this.sendJson(
+      storeDomain, accessToken, 'POST', `/products/${productId}/metafields.json`, { metafield }, 'Sapo create product metafield failed',
+    );
     const payload = await res.json() as { metafield?: SapoMetafield };
     if (!payload.metafield) throw new BadRequestException('Failed to create product metafield');
     return payload.metafield;
@@ -276,31 +256,13 @@ export class SapoApiService {
   ): Promise<SapoMetafield> {
     assertNumericId(productId, 'productId');
     assertNumericId(metafieldId, 'metafieldId');
-    const url = this.buildUrl(storeDomain, `/products/${productId}/metafields/${metafieldId}.json`);
-    const res = await this.throttledRequest(storeDomain, false, async () => {
-      const r = await fetch(url, {
-        method: 'PUT',
-        headers: { 'X-Sapo-Access-Token': accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ metafield }),
-      });
-      if (!r.ok) {
-        const detail = await r.text().catch(() => '');
-        throw new BadRequestException({ message: 'Sapo update product metafield failed', status: r.status, detail });
-      }
-      return r;
-    });
+    const res = await this.sendJson(
+      storeDomain, accessToken, 'PUT', `/products/${productId}/metafields/${metafieldId}.json`, { metafield }, 'Sapo update product metafield failed',
+    );
     const payload = await res.json() as { metafield?: SapoMetafield };
     if (!payload.metafield) throw new BadRequestException('Failed to update product metafield');
     return payload.metafield;
   }
-
-  async deleteProductMetafield(storeDomain: string, accessToken: string, productId: string, metafieldId: string): Promise<void> {
-    assertNumericId(productId, 'productId');
-    assertNumericId(metafieldId, 'metafieldId');
-    await this.fetch(storeDomain, accessToken, false, `/products/${productId}/metafields/${metafieldId}.json`, { method: 'DELETE' });
-  }
-
-  // ─── Generic Metafields (shop-level) ────────────────────────────
 
   async getMetafields(storeDomain: string, accessToken: string, ownerResource: string, ownerId?: string): Promise<SapoMetafield[]> {
     const params = new URLSearchParams();
@@ -311,19 +273,9 @@ export class SapoApiService {
 
   async createMetafield(storeDomain: string, accessToken: string, payload: SapoMetafieldCreatePayload): Promise<SapoMetafield> {
     const normalized = normalizeMetafieldPayload(payload) as SapoMetafieldCreatePayload;
-    const url = this.buildUrl(storeDomain, '/metafields.json');
-    const res = await this.throttledRequest(storeDomain, false, async () => {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'X-Sapo-Access-Token': accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ metafield: normalized }),
-      });
-      if (!r.ok) {
-        const detail = await r.text().catch(() => '');
-        throw new BadRequestException({ message: 'Sapo create metafield failed', status: r.status, detail });
-      }
-      return r;
-    });
+    const res = await this.sendJson(
+      storeDomain, accessToken, 'POST', '/metafields.json', { metafield: normalized }, 'Sapo create metafield failed',
+    );
     const p = await res.json() as { metafield?: SapoMetafield };
     if (!p.metafield) throw new BadRequestException('Failed to create metafield');
     return p.metafield;
@@ -332,27 +284,12 @@ export class SapoApiService {
   async updateMetafield(storeDomain: string, accessToken: string, metafieldId: string, payload: SapoMetafieldUpdatePayload): Promise<SapoMetafield> {
     assertNumericId(metafieldId, 'metafieldId');
     const normalized = normalizeMetafieldPayload(payload) as SapoMetafieldUpdatePayload;
-    const url = this.buildUrl(storeDomain, `/metafields/${metafieldId}.json`);
-    const res = await this.throttledRequest(storeDomain, false, async () => {
-      const r = await fetch(url, {
-        method: 'PUT',
-        headers: { 'X-Sapo-Access-Token': accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ metafield: normalized }),
-      });
-      if (!r.ok) {
-        const detail = await r.text().catch(() => '');
-        throw new BadRequestException({ message: 'Sapo update metafield failed', status: r.status, detail });
-      }
-      return r;
-    });
+    const res = await this.sendJson(
+      storeDomain, accessToken, 'PUT', `/metafields/${metafieldId}.json`, { metafield: normalized }, 'Sapo update metafield failed',
+    );
     const p = await res.json() as { metafield?: SapoMetafield };
     if (!p.metafield) throw new BadRequestException('Failed to update metafield');
     return p.metafield;
-  }
-
-  async deleteMetafield(storeDomain: string, accessToken: string, metafieldId: string): Promise<void> {
-    assertNumericId(metafieldId, 'metafieldId');
-    await this.fetch(storeDomain, accessToken, false, `/metafields/${metafieldId}.json`, { method: 'DELETE' });
   }
 
   private async getAllMetafieldPages(
@@ -364,7 +301,7 @@ export class SapoApiService {
     const collected: SapoMetafield[] = [];
     for (let page = 1; page <= maxPages; page++) {
       const path = buildPath(page, limit);
-      const res = await this.fetch(storeDomain, accessToken, false, path);
+      const res = await this.fetch(storeDomain, accessToken, path);
       const payload = await res.json() as { metafields?: SapoMetafield[] };
       if (!Array.isArray(payload.metafields)) break;
       collected.push(...payload.metafields);
@@ -373,83 +310,39 @@ export class SapoApiService {
     return collected;
   }
 
-  // ─── Orders ─────────────────────────────────────────────────────
-
-  async getOrders(storeDomain: string, accessToken: string, params: GetOrdersParams = {}): Promise<SapoOrder[]> {
-    const qp = this.buildQueryParams(params as Record<string, string | number | boolean | null | undefined>);
-    const path = `/orders.json${qp.toString() ? '?' + qp.toString() : ''}`;
-    const res = await this.fetch(storeDomain, accessToken, false, path);
-    const payload = await res.json() as SapoListResponse<SapoOrder>;
-    const key = Object.keys(payload).find((k) => Array.isArray(payload[k]));
-    return key ? payload[key] : [];
-  }
-
-  // ─── Webhooks ───────────────────────────────────────────────────
-
   async getWebhooks(storeDomain: string, accessToken: string): Promise<SapoWebhook[]> {
-    const res = await this.fetch(storeDomain, accessToken, false, '/webhooks.json');
+    const res = await this.fetch(storeDomain, accessToken, '/webhooks.json');
     const payload = await res.json() as { webhooks?: SapoWebhook[] };
     return payload.webhooks ?? [];
   }
 
-  async createWebhook(storeDomain: string, accessToken: string, topic: string, address: string): Promise<SapoWebhook | null> {
+  async createWebhook(storeDomain: string, accessToken: string, topic: string, address: string): Promise<SapoWebhook> {
+    let res: Response;
     try {
-      const url = this.buildUrl(storeDomain, '/webhooks.json');
-      const res = await this.throttledRequest(storeDomain, false, async () => {
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'X-Sapo-Access-Token': accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ webhook: { topic, address, format: 'json' } }),
-        });
-        if (!r.ok && r.status !== 409 && r.status !== 422) {
-          throw new BadRequestException(`Webhook create failed: ${r.status}`);
-        }
-        return r;
+      res = await this.fetch(storeDomain, accessToken, '/webhooks.json', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhook: { topic, address, format: 'json' } }),
       });
-      if (res.status === 409 || res.status === 422) {
-        this.logger.warn(`Webhook may already exist: topic=${topic}`);
-        return null;
-      }
-      const payload = await res.json() as { webhook?: SapoWebhook };
-      return payload.webhook ?? null;
     } catch (error) {
-      this.logger.error(`Sapo createWebhook failed topic=${topic}`, error);
-      throw error;
+      if (!(error instanceof ResponseError)) throw error;
+      if (error.status === 409 || error.status === 422) {
+        const existing = (await this.getWebhooks(storeDomain, accessToken)).find(
+          (hook) => hook.topic === topic && sameWebhookAddress(hook.address, address),
+        );
+        if (existing) return existing;
+      }
+      this.logger.error(`Sapo createWebhook failed topic=${topic} status=${error.status}`);
+      throw new BadRequestException({ message: 'Sapo create webhook failed', status: error.status });
     }
+    const payload = await res.json() as { webhook?: SapoWebhook };
+    if (!payload.webhook) throw new BadGatewayException('Sapo create webhook returned no webhook');
+    return payload.webhook;
   }
 
   async deleteWebhook(storeDomain: string, accessToken: string, webhookId: string): Promise<void> {
     assertNumericId(webhookId, 'webhookId');
-    await this.fetch(storeDomain, accessToken, false, `/webhooks/${webhookId}.json`, { method: 'DELETE' });
-  }
-
-  // ─── ScriptTags ─────────────────────────────────────────────────
-
-  async getScriptTags(storeDomain: string, accessToken: string): Promise<SapoScriptTag[]> {
-    const res = await this.fetch(storeDomain, accessToken, false, '/script_tags.json');
-    const payload = await res.json() as { script_tags?: SapoScriptTag[] };
-    return payload.script_tags ?? [];
-  }
-
-  async createScriptTag(storeDomain: string, accessToken: string, src: string): Promise<SapoScriptTag> {
-    const url = this.buildUrl(storeDomain, '/script_tags.json');
-    const res = await this.throttledRequest(storeDomain, false, async () => {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'X-Sapo-Access-Token': accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ script_tag: { src, event: 'onload' } }),
-      });
-      if (!r.ok) throw new BadRequestException(`ScriptTag create failed: ${r.status}`);
-      return r;
-    });
-    const payload = await res.json() as { script_tag?: SapoScriptTag };
-    if (!payload.script_tag) throw new BadRequestException('Failed to create script tag');
-    return payload.script_tag;
-  }
-
-  async deleteScriptTag(storeDomain: string, accessToken: string, scriptTagId: string): Promise<void> {
-    assertNumericId(scriptTagId, 'scriptTagId');
-    await this.fetch(storeDomain, accessToken, false, `/script_tags/${scriptTagId}.json`, { method: 'DELETE' });
+    await this.fetch(storeDomain, accessToken, `/webhooks/${webhookId}.json`, { method: 'DELETE' });
   }
 }
 

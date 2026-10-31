@@ -20,6 +20,12 @@ const normalizeSearchText = (value) =>
     .toLowerCase()
     .trim();
 
+const formatDefaultStats = (stats) => {
+  const avg = Number(stats.avgRating ?? stats.reviewAvg);
+  const count = Number(stats.reviewCount) || 0;
+  return Number.isFinite(avg) ? `${count} đánh giá · ${avg.toFixed(1)} sao` : `${count} đánh giá`;
+};
+
 /**
  * Smart product search dropdown with keyboard navigation (WCAG 2.1 AA).
  * Reusable across Reviews and QnA pages.
@@ -206,7 +212,7 @@ const ProductSearch = ({
                         <span className="f1g-product-search-title">{p.title}</span>
                         <span className="f1g-product-search-meta">
                           {stats
-                            ? (statsRenderer ? statsRenderer(stats) : `${stats.reviewCount} đánh giá · ${stats.reviewAvg} sao`)
+                            ? (statsRenderer ? statsRenderer(stats) : formatDefaultStats(stats))
                             : (statsRenderer ? "Chưa có dữ liệu" : "Chưa có đánh giá")}
                         </span>
                       </span>

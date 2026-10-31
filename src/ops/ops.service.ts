@@ -1,15 +1,31 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
 import { SapoService } from '../sapo/sapo.service';
-import { SapoApiService } from '../sapo/sapo-api.service';
+import { WebhookRegistrationService } from '../sapo/webhook-registration.service';
 import { CatalogSyncService } from '../catalog/catalog-sync.service';
 import { CatalogProductStoreService } from '../catalog/catalog-product-store.service';
 import { ReviewProductStoreService } from '../review/review-product-store.service';
 import { QnaStoreService } from '../qna/qna-store.service';
 import { PurchaseStoreService } from '../purchase/purchase-store.service';
 import { PrismaService } from '../database/prisma.service';
+import { MetafieldSyncPendingService } from '../database/metafield-sync-pending.service';
+import { RedisService } from '../redis/redis.service';
 import { StorefrontService } from '../storefront/storefront.service';
+import { runSection } from '../health/degraded-section';
+import { countRecentFailures, deriveHealthVerdict, FAILURE_WINDOW_MINUTES } from '../health/health-verdict';
+
+const WEBHOOK_LATEST_LIMIT = 8;
+const BACKFILL_LOCK_TTL_SECONDS = 900;
+const BACKFILL_COOLDOWN_SECONDS = 300;
 
 @Injectable()
 export class OpsService {
@@ -18,7 +34,7 @@ export class OpsService {
   constructor(
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly sapo: SapoService,
-    private readonly sapoApi: SapoApiService,
+    private readonly webhookRegistration: WebhookRegistrationService,
     private readonly catalogSync: CatalogSyncService,
     private readonly catalogStore: CatalogProductStoreService,
     private readonly reviewStore: ReviewProductStoreService,
@@ -26,25 +42,53 @@ export class OpsService {
     private readonly purchaseStore: PurchaseStoreService,
     private readonly prisma: PrismaService,
     private readonly storefront: StorefrontService,
+    private readonly pendingMetafields: MetafieldSyncPendingService,
+    private readonly redis: RedisService,
   ) {}
 
   async getHealth(storeDomain: string) {
-    const install = await this.prisma.appInstall.findUnique({ where: { storeDomain } }).catch(() => null);
-    const shopId = install?.shopId || '';
-    const [reviewStats, qnaStats, catalogAudit, purchaseAudit, webhookStats] = await Promise.all([
-      this.reviewStore.getStatsForShop(shopId).catch(() => null),
-      this.qnaStore.getStats(shopId, '').catch(() => null),
-      this.catalogStore.getAudit(shopId).catch(() => null),
-      this.purchaseStore.getAudit(shopId).catch(() => null),
-      this.getWebhookSummary(storeDomain).catch(() => ({ totals: [], latest: [] })),
+    const install = await this.prisma.appInstall.findUnique({ where: { storeDomain } });
+    if (!install) {
+      throw new NotFoundException({ code: 'install_not_found', message: 'App not installed for this store' });
+    }
+    const shopId = install.shopId;
+    const degradedSections: string[] = [];
+    const run = <T>(name: string, load: () => Promise<T>): Promise<T | null> =>
+      runSection(this.logger, name, degradedSections, load);
+
+    const [reviewStats, qnaStats, catalogAudit, purchaseAudit, webhookStats, metafieldSync, dbOk] = await Promise.all([
+      run('reviewStats', () => this.reviewStore.getStatsForShop(shopId)),
+      run('qnaStats', () => this.qnaStore.getStats(shopId)),
+      run('catalogAudit', () => this.catalogStore.getAudit(shopId)),
+      run('purchaseAudit', () => this.purchaseStore.getAudit(shopId)),
+      run('webhooks', () => this.getWebhookSummary(storeDomain)),
+      run('metafieldSync', () => this.pendingMetafields.countsFor(storeDomain)),
+      this.prisma.ping().catch((error: unknown) => {
+        this.logger.warn(`Database ping failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }),
     ]);
 
+    const recentFailures = dbOk
+      ? (await run('recentFailures', () => countRecentFailures(this.prisma, { storeDomain }))) ?? 0
+      : 0;
+    const verdict = deriveHealthVerdict({
+      healthy: dbOk,
+      recentFailures,
+      probeFailed: degradedSections.length > 0,
+    });
+
     return {
-      ok: true,
+      ok: verdict.ok,
+      degraded: verdict.degraded,
+      degradedSections,
+      health: verdict.status,
+      recentFailures,
+      failureWindowMinutes: FAILURE_WINDOW_MINUTES,
       storeDomain,
-      status: install?.status || 'unknown',
-      featuresUnlocked: install?.featuresUnlocked ?? true,
-      webhookStatus: install?.webhookRegistrationStatus || 'not_configured',
+      status: install.status,
+      featuresUnlocked: install.featuresUnlocked,
+      webhookStatus: install.webhookRegistrationStatus,
       counts: {
         products: catalogAudit?.active ?? 0,
         deletedProducts: catalogAudit?.deleted ?? 0,
@@ -56,25 +100,29 @@ export class OpsService {
       },
       catalog: catalogAudit,
       purchases: purchaseAudit,
-      webhooks: webhookStats,
+      webhooks: webhookStats ?? { totals: [], latest: [] },
+      metafieldSync,
       lastUpdated: Date.now(),
     };
   }
 
   private async getWebhookSummary(storeDomain: string) {
-    const events = await this.prisma.webhookEvent.findMany({
-      where: { resolvedStoreDomain: storeDomain },
-      orderBy: { updatedAt: 'desc' },
-      take: 8,
-      select: { id: true, topic: true, status: true, attempts: true, lastError: true, processedAt: true },
-    });
-    const byStatus: Record<string, number> = {};
-    for (const e of events) {
-      byStatus[e.status] = (byStatus[e.status] || 0) + 1;
-    }
+    const [groups, latest] = await Promise.all([
+      this.prisma.webhookEvent.groupBy({
+        by: ['status'],
+        where: { resolvedStoreDomain: storeDomain },
+        _count: { _all: true },
+      }),
+      this.prisma.webhookEvent.findMany({
+        where: { resolvedStoreDomain: storeDomain },
+        orderBy: { updatedAt: 'desc' },
+        take: WEBHOOK_LATEST_LIMIT,
+        select: { id: true, topic: true, status: true, attempts: true, lastError: true, processedAt: true },
+      }),
+    ]);
     return {
-      totals: Object.entries(byStatus).map(([status, count]) => ({ status, count })),
-      latest: events,
+      totals: groups.map((group) => ({ status: group.status, count: group._count._all })),
+      latest,
     };
   }
 
@@ -86,30 +134,42 @@ export class OpsService {
       await this.storefront.writeStorefrontConfig(storeDomain, accessToken);
     } catch (e) {
       configError = e instanceof Error ? e.message : 'failed';
-      this.logger.warn(`Config metafield write failed: ${configError}`);
+      this.logger.warn(`Config metafield write failed for ${storeDomain}: ${configError}`);
     }
-    return { ok: true, storeDomain, config, ...(configError ? { configError } : {}) };
+    return { ok: configError === null, storeDomain, config, ...(configError ? { configError } : {}) };
   }
 
   async resyncWebhooks(storeDomain: string) {
-    // Re-register all webhook topics
     const accessToken = await this.sapo.resolveAccessToken(storeDomain);
-    const results: string[] = [];
-    const { WEBHOOK_SUBSCRIBE_TOPICS } = await import('../sapo/webhook-topic-normalizer');
-    for (const topic of WEBHOOK_SUBSCRIBE_TOPICS) {
-      try {
-        await this.sapoApi.createWebhook(storeDomain, accessToken, topic, new URL('/api/oauth/install/webhooks', this.env.API_BASE_URL).toString());
-        results.push(`${topic}: ok`);
-      } catch (e) {
-        results.push(`${topic}: ${e instanceof Error ? e.message : 'failed'}`);
-      }
-    }
-    return { ok: true, storeDomain, results };
+    const result = await this.webhookRegistration.registerForInstall(storeDomain, accessToken);
+    return { ok: result.status === 'registered', storeDomain, ...result };
   }
 
   async backfillCatalog(storeDomain: string) {
-    const accessToken = await this.sapo.resolveAccessToken(storeDomain);
-    const result = await this.catalogSync.backfillStore(storeDomain, accessToken);
-    return { ok: true, storeDomain, ...result };
+    const lock = await this.redis.acquireLock(`lock:ops:backfill-catalog:${storeDomain}`, BACKFILL_LOCK_TTL_SECONDS);
+    if (!lock) {
+      throw new ConflictException({ code: 'backfill_in_progress', message: 'A catalog backfill is already running for this store' });
+    }
+    try {
+      const accessToken = await this.sapo.resolveAccessToken(storeDomain);
+      const cooldownKey = `ratelimit:ops:backfill-catalog:${storeDomain}`;
+      if (!(await this.redis.setNx(cooldownKey, Date.now(), BACKFILL_COOLDOWN_SECONDS))) {
+        const retryAfterSeconds = Math.max(1, await this.redis.ttl(cooldownKey));
+        throw new HttpException(
+          { code: 'backfill_rate_limited', message: `Catalog backfill is limited; retry in ${retryAfterSeconds}s`, retryAfterSeconds },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      const result = await this.catalogSync.backfillStore(storeDomain, accessToken);
+      return {
+        ok: result.stopReason !== 'failed_page' && result.stopReason !== 'max_pages',
+        storeDomain,
+        ...result,
+      };
+    } finally {
+      await this.redis.releaseLock(lock).catch((error: unknown) => {
+        this.logger.warn(`Backfill lock release failed for ${storeDomain}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
   }
 }

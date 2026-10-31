@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ConfigProvider, Layout, Menu, Typography, Tag, theme, Button } from "antd";
+import { ConfigProvider, Layout, Menu, Typography, Button } from "antd";
 import {
   HomeOutlined,
   StarOutlined,
@@ -18,13 +18,12 @@ import {
   CloseOutlined,
 } from "@ant-design/icons";
 import { fetchAppSession } from "../../common/ApiService";
-import { getOrgid } from "../../common/AuthStorage";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { APP_ANTD_THEME } from "../../common/antdTheme";
 import { BUILD_INFO } from "../../common/BuildInfo";
 import { shopQueryKeys } from "../../common/queryKeys";
 import { ToastProvider } from "../../common/toast";
-import { canAccessOpsPage } from "../../common/DevGate";
-import { useOrgNavigate } from "../../hooks/useOrgRoute";
+import { useStoreNavigate } from "../../hooks/useStoreRoute";
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
@@ -35,47 +34,6 @@ const SIDEBAR_BG = "#001529";
 const SIDEBAR_BORDER = "rgba(255, 255, 255, 0.10)";
 const CONTENT_MAX_WIDTH = 1560;
 
-const getPlanLabel = (status) => {
-  const normalized = String(status || "").toLowerCase();
-  if (normalized === "trial") return "Dùng thử";
-  if (normalized === "active") return "Đang hoạt động";
-  if (normalized === "pro") return "Pro";
-  return status;
-};
-
-const getDisplayPlan = (shopInfo) =>
-  shopInfo?.plan || shopInfo?.status || "";
-
-const getPlanTagStyle = (status, token) => {
-  const normalized = String(status || "").toLowerCase();
-  if (normalized === "pro") {
-    return {
-      color: "#fff7cc",
-      borderColor: "rgba(253, 230, 138, 0.62)",
-      background: "rgba(254, 243, 199, 0.15)",
-      boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.20)",
-      fontWeight: 700,
-    };
-  }
-  if (normalized === "trial") {
-    return {
-      color: token.colorPrimary,
-      borderColor: token.colorPrimaryBorder,
-      background: token.colorPrimaryBg,
-      fontWeight: 600,
-    };
-  }
-  if (normalized === "active") {
-    return {
-      color: token.colorSuccessText,
-      borderColor: token.colorSuccessBorder,
-      background: token.colorSuccessBg,
-      fontWeight: 600,
-    };
-  }
-  return {};
-};
-
 const menuItems = [
   { key: "/", icon: <HomeOutlined />, label: "Tổng quan" },
   { key: "/reviews", icon: <StarOutlined />, label: "Đánh giá" },
@@ -84,17 +42,12 @@ const menuItems = [
   { key: "/guide", icon: <BookOutlined />, label: "Hướng dẫn" },
   { key: "/contact", icon: <CustomerServiceOutlined />, label: "Liên hệ" },
   { key: "/dev", icon: <CodeOutlined />, label: "Dev guide" },
+  { key: "/health", icon: <HeartOutlined />, label: "Health" },
 ];
-
-const getMenuItems = (search) =>
-  canAccessOpsPage(search)
-    ? [...menuItems, { key: "/health", icon: <HeartOutlined />, label: "Health" }]
-    : menuItems;
 
 const AdminLayoutContent = ({ children }) => {
   const location = useLocation();
-  const navigate = useOrgNavigate();
-  const { token } = theme.useToken();
+  const navigate = useStoreNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => (
     typeof window !== "undefined"
@@ -118,19 +71,16 @@ const AdminLayoutContent = ({ children }) => {
     if (isMobile) setMobileOpen(false);
   }, [location.pathname, isMobile]);
 
-  const orgid = getOrgid();
-  const visibleMenuItems = getMenuItems(location.search);
+  const storeDomain = getStoreDomain();
   const { data: shopInfo } = useQuery({
-    queryKey: shopQueryKeys.shopInfo(orgid),
+    queryKey: shopQueryKeys.shopInfo(storeDomain),
     queryFn: fetchAppSession,
     staleTime: 5 * 60_000,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
-  const displayPlan = getDisplayPlan(shopInfo);
-  const isProPlan = String(displayPlan).toLowerCase() === "pro";
 
   const selectedKey =
-    visibleMenuItems.filter((item) => item.key !== "/").find((item) =>
+    menuItems.filter((item) => item.key !== "/").find((item) =>
       location.pathname.startsWith(item.key),
     )?.key || (location.pathname === "/" ? "/" : "/");
 
@@ -229,7 +179,7 @@ const AdminLayoutContent = ({ children }) => {
           className="f1g-admin-menu"
           mode="inline"
           selectedKeys={[selectedKey]}
-          items={visibleMenuItems}
+          items={menuItems}
           onClick={({ key }) => navigate(key)}
           style={{ borderRight: 0, marginTop: 6, background: SIDEBAR_BG }}
         />
@@ -297,38 +247,8 @@ const AdminLayoutContent = ({ children }) => {
                     lineHeight: 1.3,
                   }}
                 >
-                  {orgid || "Shop"}
+                  {storeDomain || "Shop"}
                 </Text>
-              )}
-              {displayPlan && (
-                <Tag
-                  style={{
-                    fontSize: 10,
-                    lineHeight: "18px",
-                    padding: "0 7px",
-                    margin: "3px 0 0",
-                    borderRadius: 5,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 3,
-                    letterSpacing: 0,
-                    ...getPlanTagStyle(displayPlan, token),
-                  }}
-                >
-                  {isProPlan && (
-                    <img
-                      src="https://cdn.hstatic.net/files/1000405253/file/diamond.png"
-                      alt="Pro"
-                      style={{
-                        width: 11,
-                        height: 11,
-                        objectFit: "contain",
-                        display: "block",
-                      }}
-                    />
-                  )}
-                  {getPlanLabel(displayPlan)}
-                </Tag>
               )}
             </div>
           </div>

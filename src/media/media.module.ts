@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
+import { ReviewModule } from '../review/review.module';
 import { MediaController } from './media.controller';
 import { PublicMediaController } from './public-media.controller';
-import { MediaService } from './media.service';
+import { PublicMediaGuard } from './public-media.guard';
 
 @Module({
+  imports: [ReviewModule],
   controllers: [MediaController, PublicMediaController],
-  providers: [MediaService],
-  exports: [MediaService],
+  providers: [PublicMediaGuard],
 })
 export class MediaModule {}

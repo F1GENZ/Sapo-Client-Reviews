@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { OpsController } from './ops.controller';
 import { OpsService } from './ops.service';
+import { DurabilitySweepService } from './durability-sweep.service';
 import { DatabaseModule } from '../database/database.module';
 import { CatalogModule } from '../catalog/catalog.module';
 import { ReviewModule } from '../review/review.module';
@@ -12,6 +13,6 @@ import { SapoApiModule } from '../sapo/sapo-api.module';
 @Module({
   imports: [DatabaseModule, CatalogModule, ReviewModule, QnaModule, PurchaseModule, StorefrontModule, SapoApiModule],
   controllers: [OpsController],
-  providers: [OpsService],
+  providers: [OpsService, DurabilitySweepService],
 })
 export class OpsModule {}

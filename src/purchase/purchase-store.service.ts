@@ -1,5 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { createHash } from 'crypto';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { createHash, createHmac, hkdfSync } from 'crypto';
+import { APP_ENV } from '../config/app-config.module';
+import type { AppEnv } from '../config/env.schema';
+import { assertEncryptionKey } from '../config/secret-guard';
 import { PrismaService } from '../database/prisma.service';
 
 export type CustomerPurchaseIdentity = {
@@ -19,12 +23,22 @@ type PurchaseRowInput = {
   orderCode: string | null;
   emailHash: string | null;
   phoneHash: string | null;
+  hashVersion: number;
   financialStatus: string | null;
   fulfillmentStatus: string | null;
   cancelledAt: bigint | null;
   refundedAt: bigint | null;
   purchasedAt: bigint;
-  rawPayload: unknown;
+  sourceUpdatedAt: bigint | null;
+  rawPayload: Prisma.InputJsonObject;
+};
+
+type ParsedOrder = {
+  shopId: string;
+  orderId: string;
+  sourceUpdatedAt: bigint | null;
+  productIds: string[];
+  rows: PurchaseRowInput[];
 };
 
 type PurchaseStatusRow = {
@@ -33,6 +47,19 @@ type PurchaseStatusRow = {
   cancelledAt?: bigint | null;
   refundedAt?: bigint | null;
 };
+
+const IDENTITY_HASH_VERSION = 2;
+const IDENTITY_KEY_LABEL = 'purchase-identity-v1';
+const HASH_HEX = /^[a-f0-9]{64}$/;
+
+const ORDER_TIMESTAMP_FIELDS = {
+  created: ['created_at', 'created_on', 'createdAt'],
+  processed: ['processed_at', 'processed_on'],
+  updated: ['modified_on', 'updated_at', 'updated_on', 'updatedAt'],
+  cancelled: ['cancelled_at', 'cancelled_on'],
+  closed: ['closed_at', 'closed_on'],
+  refunded: ['refunded_at', 'refunded_on'],
+} as const;
 
 const ELIGIBLE_FINANCIAL_STATUSES = new Set(['paid', 'partially_paid']);
 const ELIGIBLE_FULFILLMENT_STATUSES = new Set(['fulfilled', 'partial']);
@@ -64,28 +91,37 @@ const toObject = (value: unknown): Record<string, unknown> | null =>
 
 const toArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
-const toTimestamp = (value: unknown, fallback = Date.now()): bigint => {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
-    return BigInt(value > 10_000_000_000 ? value : value * 1000);
-  }
-  const text = toText(value);
-  if (!text) return BigInt(fallback);
-  const numeric = Number(text);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return BigInt(numeric > 10_000_000_000 ? numeric : numeric * 1000);
-  }
-  const parsed = Date.parse(text);
-  return BigInt(Number.isFinite(parsed) ? parsed : fallback);
+const scalar = (value: unknown): string | number | null => {
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return null;
 };
 
-const toNullableTimestamp = (value: unknown, fallback: number): bigint | null => {
-  if (value == null) return null;
-  return toTimestamp(value, fallback);
+const pick = (source: Record<string, unknown>, names: readonly string[]): unknown => {
+  for (const name of names) {
+    const value = source[name];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+};
+
+const parseTimestamp = (value: unknown): bigint | null => {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return BigInt(Math.trunc(value > 10_000_000_000 ? value : value * 1000));
+  }
+  const text = toText(value);
+  if (!text) return null;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return BigInt(Math.trunc(numeric > 10_000_000_000 ? numeric : numeric * 1000));
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? BigInt(parsed) : null;
 };
 
 const normalizeEmail = (value: unknown): string => toText(value).toLowerCase();
 
-const normalizePhone = (value: unknown): string => {
+export const normalizePhone = (value: unknown): string => {
   const phone = toText(value).replace(/[\s\-().]/g, '');
   if (!phone) return '';
   if (phone.startsWith('+84')) return `0${phone.slice(3)}`;
@@ -93,8 +129,7 @@ const normalizePhone = (value: unknown): string => {
   return phone;
 };
 
-const hashValue = (value: string): string | null =>
-  value ? createHash('sha256').update(value).digest('hex') : null;
+const legacyHash = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 const normalizeStatus = (value: unknown): string =>
   toText(value).toLowerCase().replace(/[\s-]+/g, '_');
@@ -107,6 +142,12 @@ const hasTimestamp = (value: unknown): boolean => {
 
 const nullIfEmpty = (value: string): string | null =>
   value ? value : null;
+
+const projectedHash = (source: Record<string, unknown>, field: string): string | null => {
+  if (source.hash_version !== IDENTITY_HASH_VERSION) return null;
+  const value = source[field];
+  return typeof value === 'string' && HASH_HEX.test(value) ? value : null;
+};
 
 export function isEligiblePurchaseStatus(row: PurchaseStatusRow): boolean {
   if (hasTimestamp(row.cancelledAt) || hasTimestamp(row.refundedAt)) {
@@ -132,29 +173,35 @@ export function isEligiblePurchaseStatus(row: PurchaseStatusRow): boolean {
 @Injectable()
 export class PurchaseStoreService {
   private readonly logger = new Logger(PurchaseStoreService.name);
+  private readonly identityKey: Buffer;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(APP_ENV) env: AppEnv,
+  ) {
+    this.identityKey = Buffer.from(
+      hkdfSync('sha256', assertEncryptionKey(env.DATA_ENCRYPTION_KEY), Buffer.alloc(0), IDENTITY_KEY_LABEL, 32),
+    );
+  }
+
+  private hashIdentity(kind: 'email' | 'phone', value: string): string {
+    return createHmac('sha256', this.identityKey).update(`${kind}:${value}`).digest('hex');
+  }
 
   async hasPurchasedProduct(
     shopId: string,
     productId: string,
     identity: CustomerPurchaseIdentity,
   ): Promise<boolean> {
-    const emailHash = hashValue(normalizeEmail(identity.email));
-    const phoneHash = hashValue(normalizePhone(identity.phone));
-    if (!emailHash && !phoneHash) return false;
+    const email = normalizeEmail(identity.email);
+    const phone = normalizePhone(identity.phone);
+    const matchers: Prisma.CustomerPurchaseWhereInput[] = [];
+    if (email) matchers.push({ emailHash: { in: [this.hashIdentity('email', email), legacyHash(email)] } });
+    if (phone) matchers.push({ phoneHash: { in: [this.hashIdentity('phone', phone), legacyHash(phone)] } });
+    if (!matchers.length) return false;
 
     const rows = await this.prisma.customerPurchase.findMany({
-      where: {
-        shopId,
-        productId,
-        ...((emailHash || phoneHash) && {
-          OR: [
-            ...(emailHash ? [{ emailHash }] : []),
-            ...(phoneHash ? [{ phoneHash }] : []),
-          ],
-        }),
-      },
+      where: { shopId, productId, OR: matchers },
       select: {
         financialStatus: true,
         fulfillmentStatus: true,
@@ -168,10 +215,10 @@ export class PurchaseStoreService {
   }
 
   async syncOrder(input: CustomerPurchaseOrderInput): Promise<number> {
-    const rows = this.normalizeOrder(input.shopId, input.order);
-    if (!rows.length) return 0;
-    await this.upsertRows(rows);
-    return rows.length;
+    const parsed = this.parseOrder(input.shopId, input.order);
+    if (!parsed) return 0;
+    const applied = await this.applyOrder(parsed);
+    return applied ? parsed.rows.length : 0;
   }
 
   async getAudit(shopId: string): Promise<{
@@ -179,13 +226,13 @@ export class PurchaseStoreService {
     orders: number;
     lastUpdated: number | null;
   }> {
-    const [totalResult, orderRows, lastRow] = await Promise.all([
+    const [totalResult, orderCountRows, lastRow] = await Promise.all([
       this.prisma.customerPurchase.count({ where: { shopId } }),
-      this.prisma.customerPurchase.findMany({
-        where: { shopId },
-        select: { orderId: true },
-        distinct: ['orderId'],
-      }),
+      this.prisma.$queryRaw<Array<{ orders: bigint }>>`
+        SELECT COUNT(DISTINCT "order_id") AS orders
+        FROM "customer_purchases"
+        WHERE "shop_id" = ${shopId}
+      `,
       this.prisma.customerPurchase.findFirst({
         where: { shopId },
         select: { updatedAt: true },
@@ -195,77 +242,146 @@ export class PurchaseStoreService {
 
     return {
       total: totalResult,
-      orders: orderRows.length,
+      orders: Number(orderCountRows[0]?.orders ?? 0),
       lastUpdated: lastRow?.updatedAt ? Number(lastRow.updatedAt) : null,
     };
   }
 
   normalizeOrder(shopId: string, order: Record<string, unknown>): PurchaseRowInput[] {
-    const sourceOrder = toObject(order.order) || order;
-    const orderId = toText(sourceOrder.id || sourceOrder.order_id || sourceOrder.orderId);
-    if (!shopId || !orderId) return [];
+    return this.parseOrder(shopId, order)?.rows ?? [];
+  }
 
+  toStoredOrder(order: Record<string, unknown>): Prisma.InputJsonObject {
+    const source = toObject(order.order) || order;
+    const { emailHash, phoneHash } = this.orderIdentityHashes(source);
+    const projected: Record<string, Prisma.InputJsonValue | null> = {
+      id: nullIfEmpty(toText(source.id || source.order_id || source.orderId)),
+      order_number: scalar(source.order_number),
+      name: scalar(source.name),
+      financial_status: scalar(source.financial_status ?? source.financialStatus),
+      fulfillment_status: scalar(source.fulfillment_status ?? source.fulfillmentStatus),
+    };
+    for (const names of Object.values(ORDER_TIMESTAMP_FIELDS)) {
+      for (const name of names) {
+        const value = scalar(source[name]);
+        if (value !== null) projected[name === 'createdAt' ? 'created_at' : name === 'updatedAt' ? 'updated_at' : name] = value;
+      }
+    }
+    projected.line_items = this.orderProductIds(source).map((productId) => ({ product_id: productId }));
+    projected.email_hash = emailHash;
+    projected.phone_hash = phoneHash;
+    projected.hash_version = IDENTITY_HASH_VERSION;
+    return projected;
+  }
+
+  private orderIdentityHashes(source: Record<string, unknown>): { emailHash: string | null; phoneHash: string | null } {
     const email =
-      normalizeEmail(sourceOrder.email) ||
-      normalizeEmail(toObject(sourceOrder.customer)?.email) ||
-      normalizeEmail(toObject(sourceOrder.billing_address)?.email);
+      normalizeEmail(source.email) ||
+      normalizeEmail(toObject(source.customer)?.email) ||
+      normalizeEmail(toObject(source.billing_address)?.email);
     const phone =
-      normalizePhone(sourceOrder.phone) ||
-      normalizePhone(toObject(sourceOrder.customer)?.phone) ||
-      normalizePhone(toObject(sourceOrder.billing_address)?.phone) ||
-      normalizePhone(toObject(sourceOrder.shipping_address)?.phone);
-    const emailHash = hashValue(email);
-    const phoneHash = hashValue(phone);
-    if (!emailHash && !phoneHash) return [];
+      normalizePhone(source.phone) ||
+      normalizePhone(toObject(source.customer)?.phone) ||
+      normalizePhone(toObject(source.billing_address)?.phone) ||
+      normalizePhone(toObject(source.shipping_address)?.phone);
+    return {
+      emailHash: projectedHash(source, 'email_hash') ?? (email ? this.hashIdentity('email', email) : null),
+      phoneHash: projectedHash(source, 'phone_hash') ?? (phone ? this.hashIdentity('phone', phone) : null),
+    };
+  }
 
-    const purchasedAt = toTimestamp(
-      sourceOrder.created_at || sourceOrder.createdAt || sourceOrder.processed_at,
-    );
-    const cancelledAt = sourceOrder.cancelled_at
-      ? toNullableTimestamp(sourceOrder.cancelled_at, Number(purchasedAt))
-      : null;
-    const refundedAt = sourceOrder.refunded_at
-      ? toNullableTimestamp(sourceOrder.refunded_at, Number(purchasedAt))
-      : null;
-    const financialStatus = normalizeStatus(
-      sourceOrder.financial_status || sourceOrder.financialStatus,
-    );
-    const fulfillmentStatus = normalizeStatus(
-      sourceOrder.fulfillment_status || sourceOrder.fulfillmentStatus,
-    );
-    const orderCode =
-      toText(sourceOrder.order_number) ||
-      toText(sourceOrder.name) ||
-      toText(sourceOrder.order_code) ||
-      null;
-
-    return toArray(sourceOrder.line_items || sourceOrder.lineItems)
+  private orderProductIds(source: Record<string, unknown>): string[] {
+    return toArray(source.line_items || source.lineItems)
       .map((item) => toObject(item))
       .filter((item): item is Record<string, unknown> => !!item)
       .map((item) => toText(item.product_id || item.productId))
       .filter(Boolean)
-      .filter((productId, index, list) => list.indexOf(productId) === index)
-      .map((productId) => ({
+      .filter((productId, index, list) => list.indexOf(productId) === index);
+  }
+
+  private parseOrder(shopId: string, order: Record<string, unknown>): ParsedOrder | null {
+    const source = toObject(order.order) || order;
+    const orderId = toText(source.id || source.order_id || source.orderId);
+    if (!shopId || !orderId) return null;
+
+    const { emailHash, phoneHash } = this.orderIdentityHashes(source);
+    if (!emailHash && !phoneHash) return null;
+
+    const purchasedAt =
+      parseTimestamp(pick(source, ORDER_TIMESTAMP_FIELDS.created)) ??
+      parseTimestamp(pick(source, ORDER_TIMESTAMP_FIELDS.processed)) ??
+      BigInt(Date.now());
+    const cancelledRaw = pick(source, ORDER_TIMESTAMP_FIELDS.cancelled);
+    const refundedRaw = pick(source, ORDER_TIMESTAMP_FIELDS.refunded);
+    const updatedRaw = pick(source, ORDER_TIMESTAMP_FIELDS.updated);
+    const closedRaw = pick(source, ORDER_TIMESTAMP_FIELDS.closed);
+    const cancelledAt = cancelledRaw === undefined ? null : parseTimestamp(cancelledRaw) ?? purchasedAt;
+    const refundedAt = refundedRaw === undefined ? null : parseTimestamp(refundedRaw) ?? purchasedAt;
+    const sourceUpdatedAt = updatedRaw === undefined ? null : parseTimestamp(updatedRaw);
+    const financialStatus = normalizeStatus(source.financial_status || source.financialStatus);
+    const fulfillmentStatus = normalizeStatus(source.fulfillment_status || source.fulfillmentStatus);
+    const orderCode =
+      toText(source.order_number) ||
+      toText(source.name) ||
+      toText(source.order_code) ||
+      null;
+    const rawPayload: Prisma.InputJsonObject = {
+      id: orderId,
+      order_number: scalar(source.order_number),
+      name: scalar(source.name),
+      financial_status: scalar(source.financial_status ?? source.financialStatus),
+      fulfillment_status: scalar(source.fulfillment_status ?? source.fulfillmentStatus),
+      created_at: scalar(pick(source, ORDER_TIMESTAMP_FIELDS.created)),
+      updated_at: scalar(updatedRaw),
+      closed_at: scalar(closedRaw),
+      cancelled_at: scalar(cancelledRaw),
+      refunded_at: scalar(refundedRaw),
+    };
+
+    const productIds = this.orderProductIds(source);
+    return {
+      shopId,
+      orderId,
+      sourceUpdatedAt,
+      productIds,
+      rows: productIds.map((productId) => ({
         shopId,
         productId,
         orderId,
         orderCode,
         emailHash,
         phoneHash,
+        hashVersion: IDENTITY_HASH_VERSION,
         financialStatus: nullIfEmpty(financialStatus),
         fulfillmentStatus: nullIfEmpty(fulfillmentStatus),
         cancelledAt,
         refundedAt,
         purchasedAt,
-        rawPayload: sourceOrder,
-      }));
+        sourceUpdatedAt,
+        rawPayload,
+      })),
+    };
   }
 
-  private async upsertRows(rows: PurchaseRowInput[]): Promise<void> {
+  private async applyOrder(parsed: ParsedOrder): Promise<boolean> {
+    const { shopId, orderId } = parsed;
+    const lockKey = `${shopId}:${orderId}`;
     try {
-      await this.prisma.$transaction(
-        rows.map((row) =>
-          this.prisma.customerPurchase.upsert({
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+        if (parsed.sourceUpdatedAt !== null) {
+          const stored = await tx.customerPurchase.aggregate({
+            where: { shopId, orderId },
+            _max: { sourceUpdatedAt: true },
+          });
+          const storedAt = stored._max.sourceUpdatedAt;
+          if (storedAt !== null && parsed.sourceUpdatedAt < storedAt) return false;
+        }
+        await tx.customerPurchase.deleteMany({
+          where: { shopId, orderId, productId: { notIn: parsed.productIds } },
+        });
+        for (const row of parsed.rows) {
+          await tx.customerPurchase.upsert({
             where: {
               shopId_productId_orderId: {
                 shopId: row.shopId,
@@ -280,12 +396,14 @@ export class PurchaseStoreService {
               orderCode: row.orderCode,
               emailHash: row.emailHash,
               phoneHash: row.phoneHash,
+              hashVersion: row.hashVersion,
               financialStatus: row.financialStatus,
               fulfillmentStatus: row.fulfillmentStatus,
               cancelledAt: row.cancelledAt,
               refundedAt: row.refundedAt,
               purchasedAt: row.purchasedAt,
-              rawPayload: row.rawPayload as any,
+              sourceUpdatedAt: row.sourceUpdatedAt,
+              rawPayload: row.rawPayload,
               createdAt: new Date(),
               updatedAt: BigInt(Date.now()),
             },
@@ -293,17 +411,20 @@ export class PurchaseStoreService {
               orderCode: row.orderCode,
               emailHash: row.emailHash,
               phoneHash: row.phoneHash,
+              hashVersion: row.hashVersion,
               financialStatus: row.financialStatus,
               fulfillmentStatus: row.fulfillmentStatus,
               cancelledAt: row.cancelledAt,
               refundedAt: row.refundedAt,
               purchasedAt: row.purchasedAt,
-              rawPayload: row.rawPayload as any,
+              ...(row.sourceUpdatedAt === null ? {} : { sourceUpdatedAt: row.sourceUpdatedAt }),
+              rawPayload: row.rawPayload,
               updatedAt: BigInt(Date.now()),
             },
-          }),
-        ),
-      );
+          });
+        }
+        return true;
+      });
     } catch (error) {
       this.logger.warn(
         `Customer purchase sync failed: ${

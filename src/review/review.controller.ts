@@ -14,6 +14,7 @@ import {
   BadRequestException,
   DefaultValuePipe,
   ParseIntPipe,
+  ValidationPipe,
 } from '@nestjs/common';
 import { ShopAuthGuard } from '../common/guards/shop-auth.guard';
 import { ReviewService } from './review.service';
@@ -23,30 +24,34 @@ import { ReplyReviewDto } from './dto/reply-review.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { UpdateSpamConfigDto } from './dto/update-spam-config.dto';
 import { UpdateWidgetConfigDto } from './dto/update-widget-config.dto';
-import { ValidationPipe } from '@nestjs/common';
+import { SyncMetafieldDto } from './dto/sync-metafield.dto';
 import { NumericIdPipe } from '../common/pipes/numeric-id.pipe';
+import { STORE_DOMAIN_RE } from '../common/security/public-limits';
 
 type AuthRequest = {
   token?: string;
   storeDomain?: string;
 };
 
-/** Validate storeDomain helper — uses regex match to ensure a valid domain. */
-const STORE_DOMAIN_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+function parseStar(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const star = Number(raw);
+  if (!Number.isInteger(star) || star < 1 || star > 5) {
+    throw new BadRequestException('star must be an integer 1-5');
+  }
+  return star;
+}
 
-/** Ensure the request has valid auth (token + storeDomain). */
 function requireAuth(req: AuthRequest): asserts req is Required<AuthRequest> & { storeDomain: string } {
   if (!req.token || !req.storeDomain || !STORE_DOMAIN_RE.test(req.storeDomain)) {
     throw new BadRequestException('Missing or invalid auth');
   }
 }
 
-@Controller('admin/reviews')
+@Controller('api/admin/reviews')
 @UseGuards(ShopAuthGuard)
 export class ReviewController {
   constructor(private readonly reviewService: ReviewService) {}
-
-  // ── Config routes (static, before :productId param) ──────────────────
 
   @Get('widget-config')
   async getWidgetConfig(@Req() req: AuthRequest) {
@@ -84,11 +89,10 @@ export class ReviewController {
     return { data: config };
   }
 
-  // ── Sync metafield ────────────────────────────────────────────────────
-
   @Post('sync-metafield')
   async syncMetafield(
-    @Body() body: { productId?: string },
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    body: SyncMetafieldDto,
     @Req() req: AuthRequest,
   ) {
     requireAuth(req);
@@ -100,8 +104,6 @@ export class ReviewController {
     return { data: result };
   }
 
-  // ── Cross-product list ────────────────────────────────────────────────
-
   @Get()
   async listAllReviews(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
@@ -110,29 +112,35 @@ export class ReviewController {
     @Query('sort') sort: string | undefined,
     @Query('productId') productId: string | undefined,
     @Query('search') search: string | undefined,
+    @Query('star') star: string | undefined,
     @Req() req: AuthRequest,
   ) {
     requireAuth(req);
     const reviews = await this.reviewService.listAllReviews(req.token, req.storeDomain, {
       page,
       limit,
-      status: status as string | undefined,
-      sort: sort as string | undefined,
+      status,
+      sort,
       productId,
       search,
+      star: parseStar(star),
     });
     return { data: reviews };
   }
 
-  // ── Product-scoped routes ─────────────────────────────────────────────
-
   @Get(':productId')
   async getReviews(
     @Param('productId', NumericIdPipe) productId: string,
+    @Query('star') star: string | undefined,
     @Req() req: AuthRequest,
   ) {
     requireAuth(req);
-    const reviews = await this.reviewService.getReviews(req.token, req.storeDomain, productId);
+    const reviews = await this.reviewService.getReviews(
+      req.token,
+      req.storeDomain,
+      productId,
+      parseStar(star),
+    );
     return { data: reviews };
   }
 

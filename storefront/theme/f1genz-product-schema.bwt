@@ -1,0 +1,31 @@
+{% comment %}
+  F1GENZ Reviews - product JSON-LD with aggregateRating (server-side rendered, no JS).
+  Reads product metafields in namespace f1genz_reviews: rating_count (integer), rating_avg (string "4.6").
+  Renders nothing unless there is at least one approved review: with 0 reviews there is no aggregateRating.
+  Use inside product.bwt with an include tag for f1genz-product-schema.
+  Filters used: escape only.
+{% endcomment %}
+{% if product %}
+  {% assign f1g_count = product.metafields.f1genz_reviews.rating_count %}
+  {% assign f1g_avg = product.metafields.f1genz_reviews.rating_avg %}
+  {% if f1g_count != blank and f1g_count != 0 and f1g_count != '0' and f1g_avg != blank and f1g_avg != 0 and f1g_avg != '0' %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org/",
+    "@type": "Product",
+    "@id": "{{ canonical_url | escape }}#product",
+    "name": "{{ product.name | escape }}",
+    "url": "{{ canonical_url | escape }}",
+    {% if product.featured_image.src != blank %}"image": "{{ product.featured_image.src | escape }}",{% endif %}
+    {% if product.vendor != blank %}"brand": { "@type": "Brand", "name": "{{ product.vendor | escape }}" },{% endif %}
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "{{ f1g_avg }}",
+      "reviewCount": "{{ f1g_count }}",
+      "bestRating": "5",
+      "worstRating": "1"
+    }
+  }
+  </script>
+  {% endif %}
+{% endif %}

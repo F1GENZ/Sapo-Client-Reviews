@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import httpClient from "../config/AxiosConfig";
-import { getOrgid } from "../common/AuthStorage";
+import { getStoreDomain } from "../common/AuthStorage";
 
 const normalizeUploadResult = (payload) => {
   const data = payload?.data?.data || payload?.data || payload;
@@ -32,10 +32,7 @@ export const useMediaUpload = () => {
       const ticket = ticketRes.data?.data?.ticket;
       if (!ticket) throw new Error("Upload ticket missing");
 
-      const storeDomain =
-        getOrgid() ||
-        new URLSearchParams(window.location.search).get("orgid") ||
-        "";
+      const storeDomain = getStoreDomain() || "";
 
       const formData = new FormData();
       formData.append("file", file);
@@ -45,6 +42,7 @@ export const useMediaUpload = () => {
         formData,
         {
           headers: { "x-store-domain": storeDomain },
+          skipAuthRedirect: true,
           onUploadProgress: (e) => {
             if (e.total) setProgress(Math.round((e.loaded / e.total) * 100));
           },

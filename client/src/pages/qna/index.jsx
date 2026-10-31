@@ -12,9 +12,10 @@ import {
   deleteQuestion,
   fetchDashboardOverview,
 } from "../../common/ApiService";
-import { getOrgid } from "../../common/AuthStorage";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { shopQueryKeys } from "../../common/queryKeys";
 import AdminLayout from "../../components/layout/AdminLayout";
+import { buildProductUrl } from "../../common/storeUrl";
 import QnaCard from "../../components/qna/QnaCard";
 import ProductSearch from "../../components/ProductSearch";
 import { getErrorMessage } from "../../common/getErrorMessage";
@@ -25,7 +26,7 @@ import {
 } from "antd";
 import { PlusOutlined, HomeOutlined } from "@ant-design/icons";
 import { useSearchParams } from "react-router-dom";
-import Link from "../../components/OrgLink";
+import Link from "../../components/StoreLink";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -93,7 +94,7 @@ QuestionTableRow.displayName = "QuestionTableRow";
 
 const QnaPage = () => {
   const queryClient = useQueryClient();
-  const orgid = getOrgid();
+  const storeDomain = getStoreDomain();
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -108,27 +109,27 @@ const QnaPage = () => {
   const [productSearchQuery, setProductSearchQuery] = useState("");
 
   const { data: overview } = useQuery({
-    queryKey: shopQueryKeys.dashboardOverview(orgid),
+    queryKey: shopQueryKeys.dashboardOverview(storeDomain),
     queryFn: fetchDashboardOverview,
     staleTime: 5 * 60 * 1000,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
 
   const { data: productsData } = useQuery({
-    queryKey: shopQueryKeys.products(orgid, { limit: 50 }),
+    queryKey: shopQueryKeys.products(storeDomain, { limit: 50 }),
     queryFn: () => fetchProducts({ limit: 50 }),
     staleTime: 5 * 60 * 1000,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
 
   const { data: searchedProductsData } = useQuery({
-    queryKey: shopQueryKeys.products(orgid, {
+    queryKey: shopQueryKeys.products(storeDomain, {
       limit: 50,
       title: productSearchQuery,
     }),
     queryFn: () => fetchProducts({ limit: 50, title: productSearchQuery }),
     staleTime: 60 * 1000,
-    enabled: !!orgid && productSearchQuery.length >= 2,
+    enabled: !!storeDomain && productSearchQuery.length >= 2,
   });
 
   const statsMap = useMemo(() => {
@@ -181,9 +182,9 @@ const QnaPage = () => {
   );
 
   const { data: selectedProductDetails } = useQuery({
-    queryKey: shopQueryKeys.product(orgid, selectedProduct),
+    queryKey: shopQueryKeys.product(storeDomain, selectedProduct),
     queryFn: () => fetchProduct(selectedProduct),
-    enabled: !!orgid && !!selectedProduct && !productInList,
+    enabled: !!storeDomain && !!selectedProduct && !productInList,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -214,19 +215,12 @@ const QnaPage = () => {
     setSelectedProduct(value);
     setActiveTab("all");
     setPage(1);
-    const nextParams = orgid ? { orgid } : {};
+    const nextParams = storeDomain ? { storeDomain } : {};
     if (value) nextParams.product = value;
     setSearchParams(nextParams, { replace: true });
-  }, [orgid, setSearchParams]);
+  }, [storeDomain, setSearchParams]);
 
-  const { data: questions = [], isLoading: questionsLoading } = useQuery({
-    queryKey: shopQueryKeys.qna(orgid, selectedProduct),
-    queryFn: () => fetchQuestions(selectedProduct),
-    enabled: !!selectedProduct,
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const allQuestionsParams = useMemo(
+  const questionsParams = useMemo(
     () => ({
       page,
       pageSize: ALL_QNA_PAGE_SIZE,
@@ -236,75 +230,61 @@ const QnaPage = () => {
     [activeTab, page, sortBy],
   );
 
-  const { data: allQuestionsData, isLoading: allQuestionsLoading } = useQuery({
-    queryKey: shopQueryKeys.allQna(orgid, allQuestionsParams),
-    queryFn: () => fetchAllQuestions(allQuestionsParams),
-    enabled: !selectedProduct && !!orgid,
+  const {
+    data: productQuestionsData,
+    isLoading: productQuestionsLoading,
+    isPlaceholderData: productQuestionsPlaceholder,
+  } = useQuery({
+    queryKey: shopQueryKeys.productQna(storeDomain, selectedProduct, questionsParams),
+    queryFn: () => fetchQuestions(selectedProduct, questionsParams),
+    enabled: !!selectedProduct && !!storeDomain,
     staleTime: 5 * 60 * 1000,
     placeholderData: keepPreviousData,
     retry: false,
   });
 
-  const filteredQuestions = useMemo(() => {
-    if (!selectedProduct) return allQuestionsData?.items || [];
-    let result = [...questions];
+  const {
+    data: allQuestionsData,
+    isLoading: allQuestionsLoading,
+    isPlaceholderData: allQuestionsPlaceholder,
+  } = useQuery({
+    queryKey: shopQueryKeys.allQna(storeDomain, questionsParams),
+    queryFn: () => fetchAllQuestions(questionsParams),
+    enabled: !selectedProduct && !!storeDomain,
+    staleTime: 5 * 60 * 1000,
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
 
-    if (activeTab === "pending") result = result.filter((question) => question.status === "pending");
-    else if (activeTab === "answered") result = result.filter((question) => !!question.answer);
-    else if (activeTab === "unanswered") result = result.filter((question) => !question.answer);
-    else if (activeTab === "hidden") result = result.filter((question) => question.status === "hidden");
+  const questionsData = selectedProduct ? productQuestionsData : allQuestionsData;
+  const questionsLoading = selectedProduct ? productQuestionsLoading : allQuestionsLoading;
+  const questionsPlaceholder = selectedProduct ? productQuestionsPlaceholder : allQuestionsPlaceholder;
+  const visibleQuestions = questionsData?.items || [];
 
-    if (sortBy === "newest") result.sort((a, b) => b.created_at - a.created_at);
-    else if (sortBy === "oldest") result.sort((a, b) => a.created_at - b.created_at);
-
-    return result;
-  }, [allQuestionsData, questions, activeTab, sortBy, selectedProduct]);
-
-  const visibleQuestions = useMemo(() => {
-    if (!selectedProduct) return filteredQuestions;
-    const start = (page - 1) * ALL_QNA_PAGE_SIZE;
-    return filteredQuestions.slice(start, start + ALL_QNA_PAGE_SIZE);
-  }, [filteredQuestions, page, selectedProduct]);
-
-  const qnaPagination = selectedProduct
-    ? {
-        total: filteredQuestions.length,
-        page,
-        pageSize: ALL_QNA_PAGE_SIZE,
-      }
-    : {
-        total: allQuestionsData?.total || 0,
-        page: allQuestionsData?.page || page,
-        pageSize: allQuestionsData?.pageSize || ALL_QNA_PAGE_SIZE,
-      };
+  const qnaPagination = {
+    total: questionsData?.total || 0,
+    page: questionsData?.page || page,
+    pageSize: questionsData?.pageSize || ALL_QNA_PAGE_SIZE,
+  };
 
   useEffect(() => {
-    if (!selectedProduct) return;
-    const totalPages = Math.max(1, Math.ceil(filteredQuestions.length / ALL_QNA_PAGE_SIZE));
-    if (page > totalPages) setPage(totalPages);
-  }, [filteredQuestions.length, page, selectedProduct]);
+    if (questionsPlaceholder || !questionsData?.page) return;
+    if (questionsData.page !== page) setPage(questionsData.page);
+  }, [questionsData?.page, questionsPlaceholder, page]);
 
   const invalidateAll = useCallback(async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: shopQueryKeys.qna(orgid, selectedProduct) }),
-      queryClient.invalidateQueries({ queryKey: shopQueryKeys.allQnaRoot(orgid) }),
-      queryClient.invalidateQueries({ queryKey: shopQueryKeys.dashboardOverview(orgid) }),
+      queryClient.invalidateQueries({ queryKey: shopQueryKeys.qnaRoot(storeDomain) }),
+      queryClient.invalidateQueries({ queryKey: shopQueryKeys.dashboardOverview(storeDomain) }),
     ]);
-  }, [orgid, queryClient, selectedProduct]);
+  }, [storeDomain, queryClient]);
 
   const getQuestionProductId = useCallback(
     (question) => selectedProduct || question?.productId,
     [selectedProduct],
   );
   const patchQuestionCaches = useCallback((productId, questionId, updater) => {
-    if (productId) {
-      queryClient.setQueryData(shopQueryKeys.qna(orgid, productId), (current) =>
-        Array.isArray(current)
-          ? current.map((question) => (question.id === questionId ? updater(question) : question))
-          : current,
-      );
-    }
-    queryClient.setQueryData(shopQueryKeys.allQna(orgid, allQuestionsParams), (current) =>
+    queryClient.setQueriesData({ queryKey: shopQueryKeys.qnaRoot(storeDomain) }, (current) =>
       current?.items
         ? {
             ...current,
@@ -316,15 +296,10 @@ const QnaPage = () => {
           }
         : current,
     );
-  }, [allQuestionsParams, orgid, queryClient]);
+  }, [storeDomain, queryClient]);
 
   const removeQuestionFromCaches = useCallback((productId, questionId) => {
-    if (productId) {
-      queryClient.setQueryData(shopQueryKeys.qna(orgid, productId), (current) =>
-        Array.isArray(current) ? current.filter((question) => question.id !== questionId) : current,
-      );
-    }
-    queryClient.setQueryData(shopQueryKeys.allQna(orgid, allQuestionsParams), (current) =>
+    queryClient.setQueriesData({ queryKey: shopQueryKeys.qnaRoot(storeDomain) }, (current) =>
       current?.items
         ? {
             ...current,
@@ -336,13 +311,12 @@ const QnaPage = () => {
           }
         : current,
     );
-  }, [allQuestionsParams, orgid, queryClient]);
+  }, [storeDomain, queryClient]);
 
-  const getQuestionProductUrl = useCallback((question) => {
-    const handle = question?.productHandle || selectedProductInfo?.handle;
-    if (!handle || !orgid) return "";
-    return `https://${orgid}/products/${handle}`;
-  }, [selectedProductInfo?.handle, orgid]);
+  const getQuestionProductUrl = useCallback(
+    (question) => buildProductUrl(storeDomain, question?.productHandle || selectedProductInfo?.handle),
+    [selectedProductInfo?.handle, storeDomain],
+  );
 
   const handleAnswer = useCallback(async (questionId, data, question) => {
     const productId = getQuestionProductId(question);
@@ -411,26 +385,7 @@ const QnaPage = () => {
     }
   };
 
-  const statusCounts = useMemo(() => {
-    if (!selectedProduct) return allQuestionsData?.statusCounts || EMPTY_STATUS_COUNTS;
-    const counts = {
-      all: 0,
-      pending: 0,
-      unanswered: 0,
-      answered: 0,
-      hidden: 0,
-    };
-
-    questions.forEach((question) => {
-      counts.all += 1;
-      if (question.status === "pending") counts.pending += 1;
-      if (question.status === "hidden") counts.hidden += 1;
-      if (question.answer) counts.answered += 1;
-      else counts.unanswered += 1;
-    });
-
-    return counts;
-  }, [allQuestionsData, questions, selectedProduct]);
+  const statusCounts = questionsData?.statusCounts || EMPTY_STATUS_COUNTS;
 
   const tabItems = Object.entries(STATUS_CONFIG).map(([key, config]) => ({
     key,
@@ -534,7 +489,7 @@ const QnaPage = () => {
             onChange={handleProductChange}
             onQueryChange={setProductSearchQuery}
             placeholder={selectedProduct ? "Chọn sản phẩm khác…" : "Lọc theo sản phẩm…"}
-            statsRenderer={(stats) => `${stats.qnaTotal} câu hỏi · ${stats.qnaAnswered || 0} đã trả lời`}
+            statsRenderer={(stats) => `${stats.qnaTotal} câu hỏi · ${Math.max(0, stats.qnaTotal - (stats.qnaUnanswered || 0))} đã trả lời`}
           />
         </div>
 
@@ -574,11 +529,11 @@ const QnaPage = () => {
       />
 
       <div style={{ minHeight: 200 }}>
-        {(selectedProduct ? questionsLoading : allQuestionsLoading) ? (
+        {questionsLoading ? (
           <Flex justify="center" style={{ padding: "60px 0" }}>
             <Spin />
           </Flex>
-        ) : filteredQuestions.length === 0 ? (
+        ) : visibleQuestions.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có câu hỏi nào" />
         ) : (
           <div className="f1g-bulk-table">

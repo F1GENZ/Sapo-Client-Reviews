@@ -12,7 +12,7 @@ const normalizeMessage = (value) => {
   return null;
 };
 
-export const getErrorMessage = (error, fallback = "Da xay ra loi") => {
+export const getErrorMessage = (error, fallback = "Đã xảy ra lỗi") => {
   const backendMessage = normalizeMessage(error?.response?.data?.message);
   if (backendMessage) return backendMessage;
 

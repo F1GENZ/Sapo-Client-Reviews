@@ -1,11 +1,12 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchDashboardOverview } from "../../common/ApiService";
-import { getOrgid } from "../../common/AuthStorage";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { shopQueryKeys } from "../../common/queryKeys";
 import AdminLayout from "../../components/layout/AdminLayout";
-import { useOrgRoute } from "../../hooks/useOrgRoute";
+import { useStoreRoute } from "../../hooks/useStoreRoute";
 import {
+  Alert,
   Avatar,
   Badge,
   Breadcrumb,
@@ -23,7 +24,7 @@ import {
   Typography,
   theme,
 } from "antd";
-import Link from "../../components/OrgLink";
+import Link from "../../components/StoreLink";
 import {
   ArrowRightOutlined,
   BarChartOutlined,
@@ -85,19 +86,21 @@ const getReviewStatusTag = (status) => {
   return <Tag color="green">Đã duyệt</Tag>;
 };
 
+const VN_DATE_KEY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Ho_Chi_Minh",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 const buildTrend = (trend = []) => {
   const counts = new Map(trend.map((item) => [item.date, Number(item.count || 0)]));
   const days = [];
-  const today = new Date();
+  const now = Date.now();
   for (let index = 13; index >= 0; index -= 1) {
-    const date = new Date(today);
-    date.setDate(today.getDate() - index);
-    const key = date.toISOString().slice(0, 10);
-    days.push({
-      date: key,
-      label: date.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" }),
-      count: counts.get(key) || 0,
-    });
+    const key = VN_DATE_KEY.format(new Date(now - index * 86400000));
+    const [, month, day] = key.split("-");
+    days.push({ date: key, label: `${day}/${month}`, count: counts.get(key) || 0 });
   }
   return days;
 };
@@ -352,7 +355,7 @@ const AttentionProductRow = ({ product, buildRoute }) => {
         <Tag color={product.reason === "unanswered_qna" ? "blue" : "orange"} style={{ margin: 0 }}>
           {product.reason === "unanswered_qna"
             ? `${formatNumber(product.qnaUnanswered)} Q&A`
-            : product.reviewAvg.toFixed(1)}
+            : Number(product.reviewAvg || 0).toFixed(1)}
         </Tag>
       </Flex>
     </Link>
@@ -443,13 +446,13 @@ const RecentQuestionRow = ({ question, buildRoute }) => (
 
 const DashboardPage = () => {
   const { token } = theme.useToken();
-  const orgid = getOrgid();
-  const buildRoute = useOrgRoute();
+  const storeDomain = getStoreDomain();
+  const buildRoute = useStoreRoute();
   const { data, isLoading } = useQuery({
-    queryKey: shopQueryKeys.dashboardOverview(orgid),
+    queryKey: shopQueryKeys.dashboardOverview(storeDomain),
     queryFn: fetchDashboardOverview,
     staleTime: 2 * 60 * 1000,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
 
   const overview = data || {};
@@ -501,6 +504,16 @@ const DashboardPage = () => {
             </Text>
           </Flex>
         </Flex>
+
+        {!isLoading && Array.isArray(overview.degraded) && overview.degraded.length > 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Một số số liệu chưa tải được"
+            description={`Các phần sau gặp lỗi khi tải và có thể hiển thị thiếu: ${overview.degraded.join(", ")}. Hãy tải lại trang sau ít phút.`}
+          />
+        ) : null}
 
         {isLoading ? (
           <div style={{ textAlign: "center", padding: "88px 0" }}>

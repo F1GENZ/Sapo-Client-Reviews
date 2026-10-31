@@ -10,12 +10,6 @@ import {
 } from 'class-validator';
 
 export class UpdateSpamConfigDto {
-  @IsInt()
-  @IsOptional()
-  @Min(1)
-  @Max(5)
-  minRating?: number;
-
   @IsArray()
   @IsOptional()
   @ArrayMaxSize(100)
@@ -25,7 +19,7 @@ export class UpdateSpamConfigDto {
 
   @IsInt()
   @IsOptional()
-  @Min(0)
+  @Min(1)
   @Max(5000)
   maxContentLength?: number;
 }

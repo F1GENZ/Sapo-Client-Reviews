@@ -3,15 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
+  "engines": {
+    "node": ">=20.6"
+  },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "lint": "tsc --noEmit",
-    "test": "tsx test/lifecycle.test.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "verify": "npm run lint && npm run test && npm run build",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate deploy"
+    "db:migrate": "prisma migrate deploy",
+    "test:e2e": "node e2e/http-contract.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

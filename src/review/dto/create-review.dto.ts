@@ -16,9 +16,7 @@ import {
   IsPositive,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-
-const STRICT_EMAIL_RE =
-  /^[A-Za-z0-9_%+-]+(?:\.[A-Za-z0-9_%+-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
+import { STRICT_EMAIL_RE } from '../../common/security/public-limits';
 
 class MediaItemDto {
   @IsUrl({ protocols: ['https'], require_protocol: true })

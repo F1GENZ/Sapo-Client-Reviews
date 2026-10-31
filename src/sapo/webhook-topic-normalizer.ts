@@ -1,7 +1,6 @@
 export type CanonicalWebhookTopic =
-  | 'app/charge'
   | 'app/uninstalled'
-  | 'shop/update'
+  | 'store/update'
   | 'products/create'
   | 'products/update'
   | 'products/delete'
@@ -11,16 +10,6 @@ export type CanonicalWebhookTopic =
   | 'orders/cancelled'
   | 'orders/fulfilled'
   | 'unknown';
-
-const CHARGE_TOPICS = new Set([
-  'app/charge',
-  'app/charges',
-  'app/charge_update',
-  'app_charge_update',
-  'app_charge',
-  'charges/update',
-  'charges_update',
-]);
 
 const UNINSTALL_TOPICS = new Set([
   'app_uninstall_webhook',
@@ -32,12 +21,12 @@ const UNINSTALL_TOPICS = new Set([
   'app_uninstalled',
 ]);
 
-const SHOP_UPDATE_TOPICS = new Set([
-  'shop/update',
-  'shops/update',
-  'shop_update',
-  'shops_update',
-  'shop_update_webhook',
+const STORE_UPDATE_TOPICS = new Set([
+  'store/update',
+  'stores/update',
+  'store_update',
+  'stores_update',
+  'store_update_webhook',
 ]);
 
 const PRODUCT_CREATE_TOPICS = new Set([
@@ -91,9 +80,8 @@ const ORDER_FULFILLED_TOPICS = new Set([
 
 export const normalizeWebhookTopic = (topic: unknown): CanonicalWebhookTopic => {
   const value = typeof topic === 'string' ? topic.trim().toLowerCase() : '';
-  if (CHARGE_TOPICS.has(value)) return 'app/charge';
   if (UNINSTALL_TOPICS.has(value)) return 'app/uninstalled';
-  if (SHOP_UPDATE_TOPICS.has(value)) return 'shop/update';
+  if (STORE_UPDATE_TOPICS.has(value)) return 'store/update';
   if (PRODUCT_CREATE_TOPICS.has(value)) return 'products/create';
   if (PRODUCT_UPDATE_TOPICS.has(value)) return 'products/update';
   if (PRODUCT_DELETE_TOPICS.has(value)) return 'products/delete';
@@ -109,9 +97,8 @@ export const isKnownWebhookTopic = (topic: unknown): boolean =>
   normalizeWebhookTopic(topic) !== 'unknown';
 
 export const WEBHOOK_SUBSCRIBE_TOPICS = [
-  'app/charge',
   'app/uninstalled',
-  'shop/update',
+  'store/update',
   'products/create',
   'products/update',
   'products/delete',

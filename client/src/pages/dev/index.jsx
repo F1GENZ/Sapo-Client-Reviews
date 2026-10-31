@@ -1,5 +1,6 @@
-import Link from "../../components/OrgLink";
+import Link from "../../components/StoreLink";
 import AdminLayout from "../../components/layout/AdminLayout";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { toast } from "../../common/toast";
 import {
   Alert,
@@ -24,139 +25,63 @@ import {
 
 const { Title, Text, Paragraph } = Typography;
 
-const LIQUID_ASSETS_SNIPPET = `{% if shop.metafields.f1genz.config != blank %}
-  <script>
-    window.__F1GENZ_STOREFRONT_CONFIG = {{ shop.metafields.f1genz.config.value | json }};
-  </script>
-  <link rel="stylesheet" href="{{ shop.metafields.f1genz.config.value.apiUrl }}/storefront/f1genz-storefront.css">
-  <script src="{{ shop.metafields.f1genz.config.value.apiUrl }}/storefront/f1genz-storefront.js" defer></script>
-{% endif %}`;
+const STORE_DOMAIN_PLACEHOLDER = "ten-cua-hang.mysapo.net";
+const API_URL_PLACEHOLDER = "https://API_HOST";
 
-const PRODUCT_WIDGET_SNIPPET = `<f1genz-reviews
-  product-id="{{ product.id }}"
-  orgid="{{ shop.metafields.f1genz.config.value.orgid }}"
-  customer-email="{{ customer.email | escape }}"
-  customer-phone="{{ customer.phone | default: customer.default_address.phone | escape }}"
-></f1genz-reviews>`;
+const buildSnippets = ({ apiUrl, storeDomain }) => ({
+  assets: `<script>
+  window.__F1GENZ_STOREFRONT_CONFIG = {
+    apiUrl: "${apiUrl}",
+    storeDomain: "${storeDomain}"
+  };
+</script>
+<link rel="stylesheet" href="${apiUrl}/storefront/f1genz-storefront.css">
+<script src="${apiUrl}/storefront/f1genz-storefront.js" defer></script>`,
 
-const PRODUCT_PANELS_SNIPPET = `<f1genz-reviews-panel
+  productWidget: `<f1genz-reviews
   product-id="{{ product.id }}"
-  orgid="{{ shop.metafields.f1genz.config.value.orgid }}"
+  storeDomain="${storeDomain}"
   customer-email="{{ customer.email | escape }}"
-  customer-phone="{{ customer.phone | default: customer.default_address.phone | escape }}"
+  customer-phone="{{ customer.phone | escape }}"
+></f1genz-reviews>`,
+
+  productPanels: `<f1genz-reviews-panel
+  product-id="{{ product.id }}"
+  storeDomain="${storeDomain}"
+  customer-email="{{ customer.email | escape }}"
+  customer-phone="{{ customer.phone | escape }}"
 ></f1genz-reviews-panel>
 
 <f1genz-qna-panel
   product-id="{{ product.id }}"
-  orgid="{{ shop.metafields.f1genz.config.value.orgid }}"
+  storeDomain="${storeDomain}"
   customer-email="{{ customer.email | escape }}"
-  customer-phone="{{ customer.phone | default: customer.default_address.phone | escape }}"
-></f1genz-qna-panel>`;
+  customer-phone="{{ customer.phone | escape }}"
+></f1genz-qna-panel>`,
 
-const PRODUCT_CARD_BADGE_SNIPPET = `<f1genz-rating-badge
-  orgid="{{ shop.metafields.f1genz.config.value.orgid }}"
+  cardBadge: `<f1genz-rating-badge
   product-id="{{ product.id }}"
-  avg-rating="{{ product.metafields.reviews.public_summary.value.avg | default: 0 | plus: 0.0 }}"
-  review-count="{{ product.metafields.reviews.public_summary.value.count | default: 0 | plus: 0 }}"
-></f1genz-rating-badge>`;
+  storeDomain="${storeDomain}"
+></f1genz-rating-badge>`,
 
-const PRODUCT_SCHEMA_SNIPPET = `{%- if template contains 'product' -%}
-{%- assign f1g_site_url = shop.url | replace: 'http://', 'https://' -%}
-{%- capture f1g_product_url -%}{{ f1g_site_url }}{{ product.url }}{%- endcapture -%}
-{%- assign f1g_canonical_url = canonical_url | default: f1g_product_url | replace: 'http://', 'https://' -%}
-{%- capture f1g_product_id -%}{{ f1g_canonical_url }}#product{%- endcapture -%}
-{%- capture f1g_organization_id -%}{{ f1g_site_url }}#organization{%- endcapture -%}
-{%- assign f1g_product_description = product.description | strip_html | strip_newlines | strip | truncate: 500 -%}
-{%- if f1g_product_description == blank -%}
-  {%- assign f1g_product_description = product.title | strip_html | strip_newlines | strip -%}
-{%- endif -%}
-{%- assign f1g_variant = product.selected_or_first_available_variant -%}
-{%- assign f1g_product_sku = f1g_variant.sku -%}
-{%- if f1g_product_sku == blank -%}
-  {%- assign f1g_product_sku = product.id -%}
-{%- endif -%}
-{%- assign f1g_product_barcode = f1g_variant.barcode | strip -%}
-{%- assign f1g_review_summary = product.metafields.reviews.public_summary.value -%}
-{%- assign f1g_review_avg = f1g_review_summary.avg | default: 0 | plus: 0.0 -%}
-{%- assign f1g_review_count = f1g_review_summary.count | default: 0 | plus: 0 -%}
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "Product",
-  "@id": {{ f1g_product_id | json }},
-  "name": {{ product.title | strip_html | strip_newlines | strip | json }},
-  "description": {{ f1g_product_description | json }},
-  "image": [
-    {%- assign f1g_image_count = 0 -%}
-    {%- for image in product.images limit: 6 -%}
-      {%- assign f1g_loop_image = image.src | product_img_url: '1024x1024' -%}
-      {%- if f1g_loop_image contains 'https://' -%}
-      {%- elsif f1g_loop_image contains 'http://' -%}
-        {%- assign f1g_loop_image = f1g_loop_image | replace: 'http://', 'https://' -%}
-      {%- elsif f1g_loop_image contains '//' -%}
-        {%- assign f1g_loop_image = 'https:' | append: f1g_loop_image -%}
-      {%- endif -%}
-      {%- if f1g_image_count > 0 -%},{%- endif -%}
-      {{ f1g_loop_image | json }}
-      {%- assign f1g_image_count = f1g_image_count | plus: 1 -%}
-    {%- endfor -%}
-    {%- if f1g_image_count == 0 -%}
-      {%- assign f1g_fallback_image = product.featured_image.src | product_img_url: '1024x1024' -%}
-      {%- if f1g_fallback_image contains 'https://' -%}
-      {%- elsif f1g_fallback_image contains 'http://' -%}
-        {%- assign f1g_fallback_image = f1g_fallback_image | replace: 'http://', 'https://' -%}
-      {%- elsif f1g_fallback_image contains '//' -%}
-        {%- assign f1g_fallback_image = 'https:' | append: f1g_fallback_image -%}
-      {%- endif -%}
-      {{ f1g_fallback_image | json }}
-    {%- endif -%}
-  ],
-  "sku": {{ f1g_product_sku | json }},
-  "mpn": {{ f1g_product_sku | json }},
-  {%- if f1g_product_barcode != blank -%}
-  {%- assign f1g_barcode_size = f1g_product_barcode | size -%}
-  {%- if f1g_barcode_size == 8 -%}
-  "gtin8": {{ f1g_product_barcode | json }},
-  {%- elsif f1g_barcode_size == 12 -%}
-  "gtin12": {{ f1g_product_barcode | json }},
-  {%- elsif f1g_barcode_size == 13 -%}
-  "gtin13": {{ f1g_product_barcode | json }},
-  {%- elsif f1g_barcode_size == 14 -%}
-  "gtin14": {{ f1g_product_barcode | json }},
-  {%- else -%}
-  "gtin": {{ f1g_product_barcode | json }},
-  {%- endif -%}
-  {%- endif -%}
-  "brand": {
-    "@type": "Brand",
-    "name": {{ product.vendor | default: shop.name | strip_html | strip_newlines | strip | json }}
-  },
-  {%- if f1g_review_count > 0 and f1g_review_avg > 0 -%}
-  "aggregateRating": {
-    "@type": "AggregateRating",
-    "ratingValue": {{ f1g_review_avg }},
-    "reviewCount": {{ f1g_review_count }},
-    "bestRating": 5,
-    "worstRating": 1
-  },
-  {%- endif -%}
-  "offers": {
-    "@type": "Offer",
-    "url": {{ f1g_canonical_url | json }},
-    "priceCurrency": {{ cart.currency.iso_code | default: shop.currency | default: 'VND' | json }},
-    "price": {{ f1g_variant.price | money_without_currency | remove: ',' | remove: '.' | remove: '₫' | remove: "VND" | strip | json }},
-    "priceValidUntil": {{ 'now' | date: '%Y-12-31' | json }},
-    "availability": {% if product.available %}"https://schema.org/InStock"{% else %}"https://schema.org/OutOfStock"{% endif %},
-    "itemCondition": "https://schema.org/NewCondition",
-    "seller": {
-      "@type": "Organization",
-      "@id": {{ f1g_organization_id | json }},
-      "name": {{ shop.name | strip_html | strip_newlines | strip | json }}
-    }
-  }
-}
-</script>
-{%- endif -%}`;
+  cardBadgeSsr: `{% if product.metafields.f1genz_reviews.rating_count %}
+<f1genz-rating-badge
+  product-id="{{ product.id }}"
+  storeDomain="${storeDomain}"
+  avg-rating="{{ product.metafields.f1genz_reviews.rating_avg }}"
+  review-count="{{ product.metafields.f1genz_reviews.rating_count }}"
+></f1genz-rating-badge>
+{% endif %}`,
+
+  schema: `{% include 'f1genz-product-schema' %}`,
+
+  schemaComponent: `<f1genz-product-schema
+  product-id="{{ product.id }}"
+  storeDomain="${storeDomain}"
+  product-name="{{ product.title | escape }}"
+  brand="{{ product.vendor | escape }}"
+></f1genz-product-schema>`,
+});
 
 const CodeBlock = ({ code }) => {
   const handleCopy = async () => {
@@ -208,7 +133,7 @@ const CodeBlock = ({ code }) => {
   );
 };
 
-const devSections = [
+const buildDevSections = (snippets) => [
   {
     key: "assets",
     label: (
@@ -220,10 +145,12 @@ const devSections = [
     children: (
       <>
         <Paragraph type="secondary" style={{ lineHeight: 1.7 }}>
-          Dán trước <Text code>{`</body>`}</Text> trong <Text code>layout/theme.liquid</Text>.
-          Đoạn này chỉ load khi app đã publish config vào metafield shop. Liquid sẽ expose nguyên object <Text code>f1genz.config</Text> cho runtime và dùng <Text code>shop.metafields.f1genz.config.value.apiUrl</Text> làm host chuẩn cho cả asset CSS/JS lẫn public API, không lấy từ domain Pages admin.
+          Dán trước <Text code>{`</body>`}</Text> trong file layout chính của theme Sapo (.bwt).
+          Đoạn này đặt cấu hình runtime <Text code>{`{ apiUrl, storeDomain }`}</Text> (cùng cấu trúc app ghi vào metafield shop <Text code>f1genz.config</Text> khi cài đặt)
+          và tải CSS/JS storefront từ <Text code>apiUrl</Text>, không lấy từ domain Pages admin.
+          Nếu bản build admin chưa khai báo <Text code>VITE_STOREFRONT_API_URL</Text>, hãy thay <Text code>{API_URL_PLACEHOLDER}</Text> bằng host API của app.
         </Paragraph>
-        <CodeBlock code={LIQUID_ASSETS_SNIPPET} />
+        <CodeBlock code={snippets.assets} />
       </>
     ),
   },
@@ -241,11 +168,11 @@ const devSections = [
           Dán vào vị trí muốn hiển thị khối đánh giá và hỏi đáp trong template sản phẩm.
           Thường là dưới mô tả hoặc tab đánh giá. Snippet tổng này hỗ trợ cấu hình xếp dọc hoặc 2 tab trong trang Cấu hình.
         </Paragraph>
-        <CodeBlock code={PRODUCT_WIDGET_SNIPPET} />
+        <CodeBlock code={snippets.productWidget} />
         <Paragraph type="secondary" style={{ marginTop: 14, lineHeight: 1.7 }}>
           Nếu theme cần tách đánh giá và hỏi đáp thành hai vị trí khác nhau, dùng bản panel riêng:
         </Paragraph>
-        <CodeBlock code={PRODUCT_PANELS_SNIPPET} />
+        <CodeBlock code={snippets.productPanels} />
       </>
     ),
   },
@@ -260,10 +187,14 @@ const devSections = [
     children: (
       <>
         <Paragraph type="secondary" style={{ lineHeight: 1.7 }}>
-          Dán trong file product card như <Text code>product-loop.liquid</Text>,
-          <Text code> product-item.liquid</Text> hoặc block item của trang collection/search.
+          Dán trong file product card của theme (.bwt) hoặc block item của trang collection/search.
+          Badge chỉ cần <Text code>product-id</Text> và <Text code>storeDomain</Text>; điểm trung bình và số đánh giá được tải theo lô từ API, không cần đọc metafield.
         </Paragraph>
-        <CodeBlock code={PRODUCT_CARD_BADGE_SNIPPET} />
+        <CodeBlock code={snippets.cardBadge} />
+        <Paragraph type="secondary" style={{ marginTop: 14, lineHeight: 1.7 }}>
+          Tuỳ chọn, để badge hiện ngay khi tải trang: truyền điểm từ metafield sản phẩm <Text code>f1genz_reviews.rating_avg</Text> / <Text code>rating_count</Text> do app ghi (chỉ in giá trị thô, có điều kiện <Text code>{`{% if %}`}</Text>).
+        </Paragraph>
+        <CodeBlock code={snippets.cardBadgeSsr} />
       </>
     ),
   },
@@ -278,10 +209,15 @@ const devSections = [
     children: (
       <>
         <Paragraph type="secondary" style={{ lineHeight: 1.7 }}>
-          Dán trong trang chi tiết sản phẩm, tốt nhất gần cuối template. Snippet render JSON-LD ngay từ Liquid
-          để Schema.org validator đọc được; không dùng <Text code>| json</Text> cho <Text code>ratingValue</Text> / <Text code>reviewCount</Text> sau khi đã ép số bằng <Text code>plus</Text>.
+          Để công cụ tìm kiếm thấy điểm đánh giá mà không cần chạy JavaScript, chép file <Text code>storefront/theme/f1genz-product-schema.bwt</Text> vào thư mục <Text code>snippets/</Text> của theme rồi chèn bằng <Text code>{`{% include %}`}</Text> trong template sản phẩm.
+          Snippet đọc metafield <Text code>f1genz_reviews.rating_count</Text> và <Text code>rating_avg</Text>; sản phẩm chưa có đánh giá đã duyệt thì không xuất JSON-LD.
         </Paragraph>
-        <CodeBlock code={PRODUCT_SCHEMA_SNIPPET} />
+        <CodeBlock code={snippets.schema} />
+        <Paragraph type="secondary" style={{ marginTop: 14, lineHeight: 1.7 }}>
+          Nếu không thể thêm file snippet, dùng phần tử <Text code>f1genz-product-schema</Text> (dựng JSON-LD trên trình duyệt). Chỉ dùng một trong hai cách để không có hai khối <Text code>aggregateRating</Text>.
+          Phần tử còn đọc <Text code>price</Text>, <Text code>currency</Text>, <Text code>sku</Text>, <Text code>mpn</Text>, <Text code>gtin</Text>, <Text code>description</Text>, <Text code>product-image</Text>, <Text code>product-url</Text>, <Text code>availability</Text> và <Text code>max-reviews</Text>.
+        </Paragraph>
+        <CodeBlock code={snippets.schemaComponent} />
       </>
     ),
   },
@@ -310,7 +246,13 @@ const devSections = [
   },
 ];
 
-const DevGuidePage = () => (
+const DevGuidePage = () => {
+  const snippets = buildSnippets({
+    apiUrl: (import.meta.env.VITE_STOREFRONT_API_URL || "").replace(/\/+$/, "") || API_URL_PLACEHOLDER,
+    storeDomain: getStoreDomain() || STORE_DOMAIN_PLACEHOLDER,
+  });
+
+  return (
   <AdminLayout>
     <div className="f1g-dev-page">
       <Breadcrumb
@@ -356,7 +298,7 @@ const DevGuidePage = () => (
           <Collapse
             defaultActiveKey={["assets", "product-widget", "performance"]}
             expandIconPosition="end"
-            items={devSections}
+            items={buildDevSections(snippets)}
           />
         </Card>
 
@@ -407,6 +349,7 @@ const DevGuidePage = () => (
       `}
     </style>
   </AdminLayout>
-);
+  );
+};
 
 export default DevGuidePage;

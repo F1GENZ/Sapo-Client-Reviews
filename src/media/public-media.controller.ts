@@ -1,106 +1,76 @@
 import {
+  BadRequestException,
   Body,
   Controller,
-  Headers,
+  ForbiddenException,
   HttpCode,
-  Inject,
-  Options,
   Post,
   Query,
   Req,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
+  ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Request } from 'express';
 import { MediaService, MAX_UPLOAD_BYTES } from './media.service';
-import { SapoService } from '../sapo/sapo.service';
-import { IngressRateLimitService } from '../common/security/ingress-rate-limit.service';
-import { clientFingerprint } from '../common/security/client-fingerprint';
-import { APP_ENV } from '../config/app-config.module';
-import type { AppEnv } from '../config/env.schema';
+import { PresignDto } from './dto/presign.dto';
+import { PublicMediaGuard, type PublicMediaRequest } from './public-media.guard';
+import { ReviewService } from '../review/review.service';
+import type { WidgetConfig } from '../review/interfaces/widget-config.interface';
+
+type MediaFlags = { allowImage?: boolean; allowVideo?: boolean };
+type UploadedFileLike = { buffer?: Buffer; mimetype?: string; size?: number };
+
+const ticketPipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true });
 
 @Controller('/api/public/media')
+@UseGuards(PublicMediaGuard)
 export class PublicMediaController {
   constructor(
     private readonly media: MediaService,
-    private readonly sapo: SapoService,
-    @Inject(APP_ENV) private readonly env: AppEnv,
-    private readonly rateLimit: IngressRateLimitService,
+    private readonly reviews: ReviewService,
   ) {}
 
-  @Options('*')
-  options() {
-    return;
-  }
-
-  private async assertRate(req: Request, storeDomain: string): Promise<void> {
-    await this.rateLimit.assertAllowed(
-      'public-media:upload',
-      `${storeDomain}|${clientFingerprint(req)}`,
-      this.env.PUBLIC_WRITE_RATE_LIMIT_WINDOW_SECONDS,
-      this.env.PUBLIC_WRITE_RATE_LIMIT_MAX,
-    );
-  }
-
-  /** Mint a signed upload ticket bound to the store + product + file metadata. */
   @Post('/ticket')
   @HttpCode(200)
-  async createTicket(
-    @Req() req: Request,
-    @Headers('x-store-domain') headerDomain?: string,
-    @Body() body?: {
-      productId?: string;
-      filename?: string;
-      contentType?: string;
-      fileSize?: number;
-    },
-  ) {
-    const storeDomain = String(headerDomain || '').trim();
-    if (!storeDomain) throw new (await import('@nestjs/common')).BadRequestException('Missing store domain');
-    await this.assertRate(req, storeDomain);
-    // Confirm the store has an active install before minting a ticket.
-    await this.sapo.resolveAccessToken(storeDomain);
+  async createTicket(@Req() req: PublicMediaRequest, @Body(ticketPipe) body: PresignDto) {
+    const storeDomain = req.publicStoreDomain as string;
+    const config = (await this.reviews.getServingWidgetConfig(storeDomain)) as WidgetConfig & MediaFlags;
+    const mediaType = this.media.validateUploadInput(body.contentType, body.fileSize);
+    if (mediaType === 'image' && config.allowImage === false) throw new ForbiddenException('Image upload is disabled');
+    if (mediaType === 'video' && config.allowVideo === false) throw new ForbiddenException('Video upload is disabled');
+
     const ticket = this.media.createUploadTicket({
       storeDomain,
-      productId: body?.productId || '',
-      filename: body?.filename || 'upload',
-      contentType: body?.contentType || 'application/octet-stream',
-      fileSize: body?.fileSize || 0,
+      productId: body.productId,
+      contentType: body.contentType,
+      fileSize: body.fileSize,
     });
     return { data: { ticket: ticket.ticket, expiresAt: ticket.expiresAt } };
   }
 
-  /** Receive a multipart file, verify the ticket, and PUT it to the R2 worker. */
   @Post('/upload')
   @HttpCode(200)
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 4 } }))
   async upload(
-    @UploadedFile() file: any,
-    @Req() req: Request,
-    @Headers('x-store-domain') headerDomain?: string,
+    @UploadedFile() file: UploadedFileLike | undefined,
+    @Req() req: PublicMediaRequest,
     @Query('productId') productId?: string,
     @Query('ticket') ticket?: string,
   ) {
-    const storeDomain = String(headerDomain || '').trim();
-    if (!storeDomain) throw new (await import('@nestjs/common')).BadRequestException('Missing store domain');
-    if (!file || !file.buffer || file.buffer.length === 0) {
-      throw new (await import('@nestjs/common')).BadRequestException('Missing file');
-    }
-    await this.assertRate(req, storeDomain);
+    const storeDomain = req.publicStoreDomain as string;
+    if (!file?.buffer?.length) throw new BadRequestException('Missing file');
 
-    const filename = String(file.originalname || 'upload');
     const contentType = String(file.mimetype || 'application/octet-stream');
-    const fileSize = file.size || file.buffer.length;
-    this.media.verifyUploadTicket(String(ticket || ''), {
+    const verified = await this.media.verifyUploadTicket(String(ticket || ''), {
       storeDomain,
       productId: String(productId || ''),
-      filename,
       contentType,
-      fileSize,
+      fileSize: file.size || file.buffer.length,
     });
 
-    const result = await this.media.uploadFile(storeDomain, String(productId || ''), filename, contentType, file.buffer);
+    const result = await this.media.uploadFile(storeDomain, verified.productId, verified.nonce, contentType, file.buffer);
     return { data: { url: result.cdnUrl, type: result.type } };
   }
 }

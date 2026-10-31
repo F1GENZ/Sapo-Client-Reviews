@@ -21,7 +21,7 @@ export class CatalogSyncService {
     const install = await this.prisma.appInstall.findUnique({
       where: { storeDomain },
       select: { shopId: true },
-    }).catch(() => null);
+    });
     if (!install?.shopId) {
       this.logger.warn(`No install found for ${storeDomain} while syncing catalog`);
     }
@@ -118,7 +118,7 @@ export class CatalogSyncService {
 
       if (
         totalCount !== null &&
-        synced >= totalCount
+        seenProductIds.size >= totalCount
       ) {
         stopReason = 'completed';
         break;
@@ -130,11 +130,9 @@ export class CatalogSyncService {
       }
     }
 
-    // Reconcile: mark stale sapo-source products as deleted.
-    if (
-      seenProductIds.size > 0 &&
-      (stopReason === 'completed' || stopReason === 'max_pages')
-    ) {
+    // Only a fully enumerated catalog proves absence; a truncated or short-counted run must never delete.
+    const enumeratedAll = totalCount === null || seenProductIds.size >= totalCount;
+    if (seenProductIds.size > 0 && stopReason === 'completed' && enumeratedAll) {
       const staleDeleted =
         await this.catalogStore
           .markMissingSapoProductsDeleted(
@@ -169,38 +167,6 @@ export class CatalogSyncService {
     };
   }
 
-  async handleProductWebhook(
-    storeDomain: string,
-    productId: string,
-    action: string,
-  ): Promise<void> {
-    // Webhook topics: products/create, products/update, products/delete
-    if (action === 'delete' || action === 'products/delete') {
-      const shopId = await this.resolveShopId(storeDomain);
-      if (shopId) {
-        await this.catalogStore.softDeleteProduct(shopId, productId);
-        this.logger.log(
-          `Soft-deleted catalog product ${productId} for ${storeDomain} via webhook`,
-        );
-      }
-      return;
-    }
-
-    // Resolve access token from the session. The caller (webhook handler)
-    // is expected to have already validated the store and provided a token.
-    // If called without a token, log a warning and skip.
-    // For create/update, we need the access token to fetch the full product.
-    // Since we don't have it here directly, we make it an optional parameter
-    // but document that it's needed for full fidelity.
-    this.logger.log(
-      `Webhook product ${action} for ${productId} at ${storeDomain}: full fetch requires access token`,
-    );
-  }
-
-  /**
-   * Handle a product webhook with a resolved access token, fetching the
-   * full product from the Sapo API and upserting it into the catalog.
-   */
   async handleProductWebhookWithToken(
     storeDomain: string,
     productId: string,
@@ -246,7 +212,6 @@ export class CatalogSyncService {
         error instanceof Error &&
         error.message.includes('404')
       ) {
-        // Product was likely deleted between webhook delivery and fetch.
         await this.catalogStore.softDeleteProduct(shopId, productId);
         this.logger.log(
           `Product ${productId} not found (404) for ${storeDomain}, soft-deleted`,

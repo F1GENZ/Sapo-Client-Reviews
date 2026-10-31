@@ -35,7 +35,7 @@ import {
 } from "../../common/ApiService";
 import { toast } from "../../common/toast";
 import { getErrorMessage } from "../../common/getErrorMessage";
-import { getOrgid } from "../../common/AuthStorage";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { shopQueryKeys } from "../../common/queryKeys";
 
 const { Title, Text } = Typography;
@@ -54,12 +54,10 @@ const formatTime = (value) => {
 const formatNumber = (value) => Number(value || 0).toLocaleString("vi-VN");
 
 const statusColor = {
-  delivered: "success",
-  delivered_success: "success",
+  processed: "success",
   failed: "error",
-  in_progress: "processing",
   processing: "processing",
-  queued: "processing",
+  received: "processing",
   ignored: "default",
 };
 
@@ -158,13 +156,13 @@ const ServiceCard = ({ title, ok, icon, description, detail }) => {
 const OpsPage = () => {
   const { token } = theme.useToken();
   const queryClient = useQueryClient();
-  const orgid = getOrgid();
-  const [lastResult, setLastResult] = useState(null);
-  const queryKey = shopQueryKeys.opsHealth(orgid);
+  const storeDomain = getStoreDomain();
+  const [webhookResult, setWebhookResult] = useState(null);
+  const queryKey = shopQueryKeys.opsHealth(storeDomain);
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey,
     queryFn: fetchOpsHealth,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
     refetchInterval: 30_000,
   });
 
@@ -175,12 +173,11 @@ const OpsPage = () => {
   const resyncConfig = useMutation({
     mutationFn: resyncOpsConfig,
     onSuccess: async (result) => {
-      toast.success(
-        result?.configError
-          ? `Resync config có lỗi: ${result.configError}`
-          : "Đã đồng bộ lại cấu hình storefront",
-      );
-      setLastResult(result);
+      if (result?.ok === false || result?.configError) {
+        toast.error(`Resync config có lỗi: ${result.configError || "không rõ nguyên nhân"}`);
+      } else {
+        toast.success("Đã đồng bộ lại cấu hình storefront");
+      }
       await invalidate();
     },
     onError: (error) =>
@@ -190,8 +187,12 @@ const OpsPage = () => {
   const resyncWebhooks = useMutation({
     mutationFn: resyncOpsWebhooks,
     onSuccess: async (result) => {
-      toast.success(`Đã đăng ký ${result?.results?.length || 0} webhook`);
-      setLastResult(result);
+      setWebhookResult(result);
+      if (result?.status === "registered") {
+        toast.success("Đã đăng ký lại webhook");
+      } else {
+        toast.error(`Đăng ký webhook ${result?.status || "thất bại"}${result?.error ? `: ${result.error}` : ""}`);
+      }
       await invalidate();
     },
     onError: (error) =>
@@ -201,12 +202,23 @@ const OpsPage = () => {
   const backfillCatalog = useMutation({
     mutationFn: backfillOpsCatalog,
     onSuccess: async (result) => {
-      toast.success(`Đã sync ${result?.synced || 0} sản phẩm`);
-      setLastResult(result);
+      if (result?.ok === false) {
+        toast.error(`Backfill dừng sớm (${result.stopReason || "không rõ"}): đã sync ${result.synced || 0} sản phẩm`);
+      } else {
+        toast.success(`Đã sync ${result?.synced || 0} sản phẩm`);
+      }
       await invalidate();
     },
-    onError: (error) =>
-      toast.error(getErrorMessage(error, "Backfill catalog thất bại")),
+    onError: (error) => {
+      const body = error?.response?.data;
+      if (body?.code === "backfill_rate_limited") {
+        toast.error(`Backfill vừa chạy, thử lại sau ${body.retryAfterSeconds || 0} giây`);
+      } else if (body?.code === "backfill_in_progress") {
+        toast.error("Backfill đang chạy cho cửa hàng này");
+      } else {
+        toast.error(getErrorMessage(error, "Backfill catalog thất bại"));
+      }
+    },
   });
 
   const webhookRows = Array.isArray(data?.webhooks?.latest)
@@ -215,15 +227,14 @@ const OpsPage = () => {
   const webhookFailed =
     data?.webhooks?.totals?.find?.((item) => item.status === "failed")?.count ||
     0;
-  const webhookDelivered =
-    data?.webhooks?.totals?.find?.((item) => item.status === "delivered")?.count ||
-    data?.webhooks?.totals?.find?.((item) => item.status === "delivered_success")?.count ||
+  const webhookProcessed =
+    data?.webhooks?.totals?.find?.((item) => item.status === "processed")?.count ||
     0;
 
   const statusLabel = {
     active: "Đang hoạt động",
-    trial: "Dùng thử",
-    cancelled: "Đã hủy",
+    needs_reinstall: "Cần cài lại",
+    uninstalled: "Đã gỡ",
     unknown: "Không xác định",
   };
 
@@ -303,7 +314,7 @@ const OpsPage = () => {
               detail={
                 webhookFailed > 0
                   ? `${webhookFailed} webhook lỗi`
-                  : `${webhookDelivered} webhook đã xử lý`
+                  : `${webhookProcessed} webhook đã xử lý`
               }
             />
           </Col>
@@ -351,13 +362,13 @@ const OpsPage = () => {
         </Col>
       </Row>
 
-      {lastResult && lastResult.results && (
+      {webhookResult?.status && (
         <Alert
-          type="info"
+          type={webhookResult.status === "registered" ? "success" : "warning"}
           showIcon
           style={{ marginTop: 16 }}
           message="Kết quả resync webhook"
-          description={lastResult.results.join("; ")}
+          description={`Trạng thái: ${webhookResult.status}${webhookResult.error ? ` - ${webhookResult.error}` : ""}`}
         />
       )}
 

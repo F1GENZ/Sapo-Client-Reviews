@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "budget": "node scripts/check-performance-budget.js",
-    "smoke": "node scripts/smoke-routes.cjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "node --test tests/auth-storage.contract.test.mjs",
+    "test:e2e": "node e2e/run.cjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

@@ -2,8 +2,7 @@ import { Controller, Get, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { join } from 'path';
 import { readFileSync, existsSync, statSync } from 'fs';
-
-const STOREFRONT_ASSET_CACHE_CONTROL = 'public, max-age=300, stale-while-revalidate=86400';
+import { STOREFRONT_ASSET_CACHE_CONTROL } from './storefront-asset-cache';
 
 @Controller('storefront')
 export class StorefrontAssetController {

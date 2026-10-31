@@ -21,28 +21,23 @@ import { UpdateQuestionDto } from './dto/update-question.dto';
 import { AnswerQuestionDto, UpdateQuestionStatusDto } from './dto/answer-question.dto';
 import { ValidationPipe } from '@nestjs/common';
 import { NumericIdPipe } from '../common/pipes/numeric-id.pipe';
+import { STORE_DOMAIN_RE } from '../common/security/public-limits';
 
 type AuthRequest = {
   token?: string;
   storeDomain?: string;
 };
 
-/** Validate storeDomain helper */
-const STORE_DOMAIN_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
-
-/** Ensure the request has valid auth (token + storeDomain). */
 function requireAuth(req: AuthRequest): asserts req is Required<AuthRequest> & { storeDomain: string } {
   if (!req.token || !req.storeDomain || !STORE_DOMAIN_RE.test(req.storeDomain)) {
     throw new BadRequestException('Missing or invalid auth');
   }
 }
 
-@Controller('admin/qna')
+@Controller('api/admin/qna')
 @UseGuards(ShopAuthGuard)
 export class QnaController {
   constructor(private readonly qnaService: QnaService) {}
-
-  // ── Cross-product list ────────────────────────────────────────────────
 
   @Get()
   async listAllQuestions(
@@ -66,15 +61,22 @@ export class QnaController {
     return { data: result };
   }
 
-  // ── Product-scoped routes ─────────────────────────────────────────────
-
   @Get(':productId')
   async getQuestions(
     @Param('productId', NumericIdPipe) productId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('size', new DefaultValuePipe(20), ParseIntPipe) size: number,
+    @Query('status') status: string | undefined,
+    @Query('sort') sort: string | undefined,
     @Req() req: AuthRequest,
   ) {
     requireAuth(req);
-    const result = await this.qnaService.getQuestions(req.storeDomain, productId);
+    const result = await this.qnaService.getQuestions(req.storeDomain, productId, {
+      page,
+      limit: size,
+      status,
+      sort,
+    });
     return { data: result };
   }
 

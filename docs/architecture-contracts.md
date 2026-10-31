@@ -1,238 +1,138 @@
 # Architecture and API Contracts
 
-This document freezes the Phase 2 target architecture for `haravan-app-base`. Phase 3/4 implementation should change this only when the contract is proven wrong by source docs or tests.
+Current shape of the F1GENZ Review Sapo app, derived from the code. Change a contract here only together with the code and its tests.
 
-## Workspace Shape
-
-```text
-C:\Users\Admin\Desktop\haravan-app-base\
-  client/                         # React + Vite + TypeScript lifecycle shell
-  server/                         # NestJS + Prisma + Redis lifecycle API
-  worker/                         # Future optional worker entry, not required by V1 core
-  recipes/                        # Docs-only optional modules
-  docs/                           # Contracts and handoff docs
-  scripts/                        # Verification and anti-pattern scans
-```
-
-The current Haravan Theme Ops CLI repo stores the plan only. Runtime app-base code belongs in the separate workspace above.
-
-## Backend Modules
+## Workspace shape
 
 ```text
-server/src/
-  main.ts
-  app.module.ts
-  config/
-    env.schema.ts
-  common/
-    decorators/shop-auth.decorator.ts
-    guards/shop-auth.guard.ts
-    security/origin-policy.ts
-    security/ingress-rate-limit.service.ts
-  database/
-    database.module.ts
-    prisma.service.ts
-  health/
-    health.controller.ts
-  haravan/
-    haravan.controller.ts
-    haravan.service.ts
-    haravan-api.service.ts
-    hmac-verifier.service.ts
-    lifecycle-lock.service.ts
-    oauth-state.service.ts
-    oidc-verifier.service.ts
-    session.service.ts
-    shop-domain.service.ts
-    subscription.service.ts
-    token-encryption.service.ts
-    uninstall.service.ts
-    webhook-registration.service.ts
-    webhook.service.ts
-    webhook-topic-normalizer.ts
-  redis/
-    redis.module.ts
-    redis.service.ts
+src/            NestJS server (single process, no queue consumers)
+prisma/         schema.prisma and migrations
+test/           node:test suites (lifecycle, durability, security, storefront, review-spam)
+e2e/            Black-box HTTP contract runner (npm run test:e2e)
+client/         Admin SPA (Vite + React) and client/functions/api/[[path]].js (Pages proxy)
+storefront/     Storefront widget assets and .bwt theme snippets
+worker/         Cloudflare Worker for R2 uploads
+ecosystem.config.cjs   PM2: one app, f1genz-sapo-api
 ```
 
-### Module Responsibilities
+## Backend modules (`src/`)
 
-| Module | Responsibility | Must not do |
+| Directory | Responsibility | Must not do |
 |---|---|---|
-| `env.schema.ts` | Parse and validate env. Fail closed in production. | Provide real secret defaults. |
-| `oauth-state.service.ts` | Create/consume hashed state and nonce. | Use non-atomic `get` then `del`. |
-| `oidc-verifier.service.ts` | Verify id_token through OIDC/JWKS. | Trust `jwt.decode()` identity. |
-| `hmac-verifier.service.ts` | Verify raw query/body HMAC with timing-safe compare. | Verify parsed JSON instead of raw body. |
-| `session.service.ts` | One-time handoff and HttpOnly app cookie. | Return JS-readable session token in core. |
-| `shop-auth.guard.ts` | Validate app session, orgid match, origin for unsafe methods. | Trust frontend local flags. |
-| `lifecycle-lock.service.ts` | Owner-token locks and lifecycle generation guards. | Release locks without owner compare. |
-| `webhook-registration.service.ts` | Subscribe/ensure lifecycle webhooks and record degraded state. | Silently ignore registration failures. |
-| `webhook.service.ts` | Verify, persist, idempotently reduce webhook events. | Mutate state before identity cross-check. |
-| `subscription.service.ts` | Normalize subscription snapshots and apply to install. | Require install to exist before storing snapshot. |
-| `uninstall.service.ts` | Clear tokens, tombstone domains, preserve merchant data. | Allow refresh to revive tokens. |
-| `redis.service.ts` | Namespaced Redis helpers, SCAN, GETDEL/Lua, locks. | Use `KEYS` in production paths. |
+| `config/env.schema.ts`, `app-config.module.ts` | Parse and validate env once; fail closed in production. | Provide real secret defaults. |
+| `sapo/oauth-state.service.ts` | Create/consume one-time OAuth state; safe-redirect check. | Read state then delete it separately. |
+| `sapo/hmac-verifier.service.ts` | Launch-query HMAC (Base64, sorted A-Z) and webhook raw-body HMAC, timing-safe. | Verify parsed JSON instead of raw bytes. |
+| `sapo/session.service.ts` | One-time handoff codes, session JWT, session cookie. | Put the session token in a URL. |
+| `sapo/sapo.service.ts`, `sapo.controller.ts` | Install and login flows, token resolution, session probe. | Trust callback query for identity. |
+| `sapo/sapo-api.service.ts` | All calls to `https://{store}/admin/...` with per-store throttling and `429` retry. | Be bypassed by direct `fetch` for store API calls. |
+| `sapo/token-encryption.service.ts` | AES-256-GCM encryption of access tokens. | Return token material to clients. |
+| `sapo/webhook.service.ts`, `webhook-topic-normalizer.ts`, `webhook-registration.service.ts` | Register, verify, persist, dispatch, and retry webhooks. | Mutate state before signature and identity checks. |
+| `sapo/uninstall.service.ts`, `lifecycle-lock.service.ts`, `install-revocation.ts` | Uninstall cleanup, lifecycle locks, revocation marking. | Release a lock without owner compare. |
+| `sapo/shop-domain.service.ts` | Domain to `storeDomain` mapping (Redis cache over `ShopDomain` rows). | Resolve tombstoned domains. |
+| `common/guards/shop-auth.guard.ts` | Admin auth: origin, Bearer on unsafe methods, store match, token resolve. | Trust frontend flags. |
+| `common/security/*` | Security headers, CORS, body limits, ingress rate limits, public response whitelist. | Use `KEYS`-style scans or unbounded bodies. |
+| `catalog/` | Product catalog mirror and sync (`catalog_products`). | |
+| `purchase/` | Order mirror for verified-buyer checks (`customer_purchases`, hashed email/phone). | Store raw buyer PII. |
+| `review/`, `qna/` | Review and Q&A admin and public APIs, spam config, metafield summaries. | Expose email, phone, or raw source JSON publicly. |
+| `storefront/` | Storefront config metafield and widget asset serving. | |
+| `media/` | Upload tickets (HMAC-signed) for the R2 Worker; best-effort object deletion and listing through the Worker (`DELETE /<key>`, `GET /list`). | |
+| `dashboard/`, `ops/` | Admin KPIs; health, resync, backfill, and the durability sweep. | |
+| `health/` | `/livez`, `/readyz`. | Expose details publicly. |
+| `redis/`, `database/` | Namespaced Redis helpers (`GETDEL`, owner locks, `SCAN`); Prisma service. | |
 
-## Frontend Modules
+Modules are wired in `src/app.module.ts`.
 
-```text
-client/src/
-  main.tsx
-  app.tsx
-  api/
-    api-client.ts
-    auth-api.ts
-  components/auth/auth-gate.tsx
-  config/env.ts
-  lib/
-    auth-flow.ts
-    error-reporter.ts
-    get-error-message.ts
-    org-context.ts
-    query-client.ts
-  routes/
-    dashboard-page.tsx
-    grandservice-page.tsx
-    install-login-page.tsx
-client/functions/api/[[path]].js
-```
+## Frontend (`client/src`)
 
-### Frontend Rules
+- Pages: `auth`, `dashboard`, `reviews`, `qna`, `settings`, `ops`, `guide`, `dev`, `contact`.
+- API base is the `VITE_SAPO_API_URL` dev proxy locally and same-origin `/api` through the Cloudflare Pages function in production.
+- The SPA exchanges the one-time `handoff_code` for a session token, stores it per store in browser storage (`client/src/common/AuthStorage.js`), and sends it as `Authorization: Bearer`. Auth query params are stripped from the URL after processing.
+- No Sapo access token is ever stored or rendered.
 
-- Default API base is same-origin `/api`.
-- `withCredentials` is enabled so HttpOnly cookie is sent.
-- `orgid` may be stored as UI context only; it is not an auth proof.
-- No Haravan token is stored or rendered.
-- No internal bearer/session token storage in V1 core.
-- OAuth/HMAC endpoints are excluded from generic auth interceptors.
-- Callback and handoff params are stripped from URL after processing.
+## HTTP routes
 
-## Backend API Routes
+### Auth and lifecycle (`src/sapo/sapo.controller.ts`)
 
 | Method | Path | Auth | Contract |
 |---|---|---|---|
-| `GET` | `/api/oauth/install/login` | Public + auth rate limit | Start login/SSO. If HMAC absent, start OAuth. If installed, still require OAuth proof. |
-| `GET` | `/api/oauth/install/login/verify-hmac` | Public + auth rate limit | Verify Haravan Admin raw query HMAC with finite timestamp. On success returns one-time handoff code, not session token. Missing HMAC uses login URL fallback; present-but-invalid/stale HMAC rejects fail-closed. |
-| `GET`/`POST` | `/api/oauth/install/login/callback` | Public + auth rate limit | Consume login state, exchange code, verify id_token, create handoff code. |
-| `GET` | `/api/oauth/install/grandservice` | Public + auth rate limit | Install callback. Consume install state if Haravan returns it, exchange token, verify id_token, persist install, attempt webhook registration, create handoff code. |
-| `GET` | `/api/oauth/install/webhooks` | Public + webhook rate limit | Verify `hub.verify_token`, return `hub.challenge`. No state mutation. |
-| `POST` | `/api/oauth/install/webhooks` | Public + webhook rate limit + HMAC | Verify raw body HMAC, persist idempotent event, process lifecycle reducer inline. |
-| `POST` | `/api/auth/session/exchange` | Public + auth rate limit | Atomically consume handoff code and set HttpOnly cookie. |
-| `POST` | `/api/auth/logout` | App session | Clear app session cookie. |
-| `GET` | `/api/app/session` | App session | Minimal protected session probe for frontend dashboard. |
-| `GET` | `/livez` | Public | Minimal `{ ok: true }`. No dependency/env details. |
-| `GET` | `/readyz` | `Authorization: Bearer $READINESS_TOKEN` | Redis/DB/build/webhook degraded state. No secrets/token material. |
+| `GET` | `/api/oauth/install/start` | public, auth rate limit | Returns an install authorize URL for `storeDomain`. |
+| `GET`/`POST` | `/api/oauth/install/callback` | public, auth rate limit | Install callback; consumes `install` state, exchanges the code, persists the install, returns a handoff (JSON or `302` to `FRONTEND_URL` for browsers). |
+| `GET` | `/api/oauth/install/login`, `/api/oauth/install/login/entry` | public, auth rate limit | Start a login flow. |
+| `GET` | `/api/oauth/install/login/verify-hmac` | public, auth rate limit | Verify the signed launch query and return a handoff; no `hmac` starts login; invalid `hmac` is `401`. |
+| `GET`/`POST` | `/api/oauth/install/login/callback` | public, auth rate limit | Login callback; returns a handoff or an install URL. |
+| `GET` | `/api/oauth/install/webhooks` | public | `200 ok` for reachability. |
+| `POST` | `/api/oauth/install/webhooks` | HMAC signature | Webhook delivery, see `docs/webhook-subscription-uninstall.md`. |
+| `POST` | `/api/auth/session/exchange` | handoff code, trusted origin, rate limited | Consume the code; set cookie; return `{ ok, storeDomain, redirectTo, sessionToken }`. |
+| `POST` | `/api/auth/logout` | session, trusted origin | Clear the cookie. |
+| `GET` | `/api/app/session` | session | `{ data: { storeDomain, shopDomain, status, featuresUnlocked, webhookStatus } }`. |
+| `GET` | `/livez` | public | `{ ok: true }` only. |
+| `GET` | `/readyz` | `Bearer READINESS_TOKEN` | `{ ok, degraded, status, redis, db, recentFailures, failureWindowMinutes, webhookRegistration, webhookDegraded, build }`. No secrets. |
 
-## API Response Shapes
+### Admin API (`ShopAuthGuard`, prefix `/api/admin`)
 
-### OAuth start / missing-HMAC fallback
-
-```json
-{
-  "url": "https://accounts.haravan.com/connect/authorize?...",
-  "reason": "sso_required"
-}
-```
-
-### Session handoff response
-
-```json
-{
-  "handoffCode": "opaque-one-time-code",
-  "orgid": "org-id",
-  "redirectTo": "/dashboard"
-}
-```
-
-`handoffCode` has short TTL and is useless after one exchange.
-
-### Session probe response
-
-```json
-{
-  "orgid": "org-id",
-  "shopDomain": "store.myharavan.com",
-  "status": "active",
-  "plan": "Pro",
-  "webhookStatus": "registered"
-}
-```
-
-Never include Haravan access/refresh tokens or encrypted token material.
-
-### Webhook delivery response
-
-```json
-{
-  "ok": true,
-  "topic": "app_subscriptions/update",
-  "eventId": "evt_...",
-  "status": "processed"
-}
-```
-
-Duplicate delivery returns `ok: true` with `duplicate: true` and does not rerun reducer.
-
-## Frontend Routes
-
-| Route | Contract |
+| Prefix | Routes |
 |---|---|
-| `/install/login` | Handles Admin launch, HMAC verification, OAuth callback, and fallback login start. |
-| `/install/grandservice` | Handles install callback handoff and redirects to safe path/dashboard. |
-| `/dashboard` | Minimal protected session probe and lifecycle status display. |
+| `/dashboard` | `GET /overview` |
+| `/products` | `GET /`, `GET /:productId` |
+| `/reviews` | `GET/PUT widget-config`, `GET/PUT spam-config`, `POST sync-metafield`, `GET /`, `GET/POST /:productId`, `GET /:productId/stats`, `PATCH /:productId/:reviewId` plus `/status`, `/reply`, `/pin`, `DELETE /:productId/:reviewId` |
+| `/qna` | `GET /`, `GET/POST /:productId`, `GET /:productId/stats`, `PATCH /:productId/:questionId` plus `/status`, `/answer`, `DELETE /:productId/:questionId` |
+| `/media` | `POST /upload-ticket` |
+| `/ops` | `GET /health`, `POST /resync-config`, `POST /resync-webhooks`, `POST /backfill-catalog` |
 
-## Redis Namespaces
+Admin responses wrap payloads as `{ data: ... }`. Every unsafe method needs the Bearer session token and a trusted `Origin`/`Referer`.
+
+### Public API (anonymous, prefix `/api/public`)
+
+| Prefix | Routes |
+|---|---|
+| `/reviews` | `GET config/widget`, `GET summaries`, `POST /:productId/purchase-eligibility`, `GET /:productId`, `GET /:productId/summary`, `POST /:productId` |
+| `/qna` | `GET /:productId`, `POST /:productId` |
+| `/media` | `POST /ticket`, `POST /upload` |
+
+The store comes from the `x-store-domain` header or the `storeDomain` query. Public requests get a per-client budget (reads 900/min, writes 120/min); reads have no per-store cap. Submissions also get the per-store-and-client `PUBLIC_WRITE_RATE_LIMIT_*` cap. Body limit is 256 kB. Responses pass `PublicResponseInterceptor`, which whitelists fields.
+
+### Storefront assets
+
+`GET /storefront/f1genz-storefront.js` and `GET /storefront/f1genz-storefront.css` (`src/storefront/storefront-asset.controller.ts`).
+
+## Data model (`prisma/schema.prisma`)
+
+| Model | Purpose |
+|---|---|
+| `Shop`, `AppInstall` | One row per store: status, encrypted token columns, `tokenVersion`, `lifecycleGeneration`, webhook registration status, `dataPreserved`. |
+| `ShopDomain` | Active/tombstoned domains per store; one active owner per domain. |
+| `WebhookEvent` | Idempotent webhook log with status, attempts, retry schedule. `orders/*` payloads are stored as a PII-free projection; payload and headers are nulled on uninstall; rows are purged by the retention pass. |
+| `CatalogProduct`, `CustomerPurchase` | Product and order mirrors. |
+| `ReviewProduct`, `QnaQuestion` | Reviews and questions (author-entered email/phone kept only in these tables). |
+| `MetafieldSyncPending` | Queue of product metafield writes still to be reconciled. |
+| `SubscriptionSnapshot` | Present in the schema; no current route writes it (the app has no billing). |
+
+## Redis keys
 
 All keys are prefixed by `REDIS_KEY_PREFIX`.
 
 | Key pattern | TTL | Purpose |
-|---|---:|---|
-| `{prefix}:oauth-state:{sha256(state)}` | 10 min | Login/install OAuth state + nonce metadata. |
-| `{prefix}:session-handoff:{sha256(code)}` | 1-5 min | One-time app session handoff. |
-| `{prefix}:app-session:{sessionId}` | session TTL | Optional server-side session record if stateless cookie is not enough. |
-| `{prefix}:install:{orgid}` | status dependent | Hot runtime install snapshot. |
-| `{prefix}:domain:{normalizedDomain}` | status dependent | Domain to orgid mapping. |
-| `{prefix}:subscription:{correlationKey}` | no fixed TTL for active | Pre/post install subscription snapshot. |
-| `{prefix}:lock:refresh:{orgid}` | <= 30s | Owner-token refresh lock. |
-| `{prefix}:lock:lifecycle:{orgid}` | <= 30s | Install/uninstall lifecycle lock. |
-| `{prefix}:rate:{bucket}:{fingerprint}` | window TTL | Ingress rate limiting. |
+|---|---|---|
+| `oauth-state:{sha256(state)}` | 30 min | OAuth state (flow, store, safe redirect). |
+| `session-handoff:{sha256(code)}` | `SESSION_HANDOFF_TTL_SECONDS` | One-time handoff payload. |
+| `session-handoff-store:{storeDomain}:{sha256(code)}` | same | Index so uninstall can delete a store's pending handoffs. |
+| `domain:{domain}` | none | Domain to `storeDomain` cache; rebuilt from `ShopDomain` on miss. |
+| `lock:lifecycle:{storeDomain}` | 30 s | Install and uninstall serialization. |
+| `lock:review:{shopId}:{productId}` | 30 s | Serializes read-modify-write on one product's reviews and its summary metafield; if Redis is unreachable the write continues unlocked because PostgreSQL is the source of truth. |
+| `lock:durability-sweep` | 120 s | One sweep at a time across processes. |
+| `rate:{bucket}:{fingerprint}` | window | Ingress rate limiting. |
 
-Redis helpers required in Phase 3:
+## Data boundary
 
-- `get`, `set`, `del`, `delMany`
-- `getDel` or Lua atomic consume
-- `setNx` with TTL
-- owner compare/delete lock release
-- `scanKeys` for operational cleanup only
-- `incr`/`expire` or equivalent for rate limiting
-- `ping`
+PostgreSQL is the durable source for installs, tokens, domains, webhook events, and review data. Redis holds one-time secrets, locks, rate counters, and the domain cache. After a Redis flush the domain cache refills from the database, but in-flight OAuth states and handoff codes are lost and the merchant simply restarts the flow; an uninstalled install is never revived from Redis.
 
-## Data Boundary
+## Security invariants
 
-Prisma is the durable source for install status, token material, domain tombstones, subscription snapshots, and webhook idempotency. Redis is runtime acceleration only. If Redis is empty, backend may rebuild mappings from DB, but must not resurrect uninstalled tokens.
-
-## Optional Features Boundary
-
-These are not core V1 runtime dependencies:
-
-| Recipe | Status |
-|---|---|
-| Cloudflare Pages proxy | Lightweight deploy recipe and optional client function. |
-| PM2 deploy | Lightweight deployment guide. |
-| Queue/worker | Docs-only backlog; core uses persisted outbox + inline reducer. |
-| Page builder | Docs-only backlog. |
-| Metafields UI | Docs-only backlog. |
-| R2 uploader | Docs-only backlog. |
-| Ops dashboard | Docs-only backlog after queue/worker exists. |
-
-## Security Invariants
-
-- OAuth state, nonce, and handoff code are one-time and atomically consumed.
-- OIDC/JWKS verification is mandatory for identity.
-- HMAC verification uses raw query/body bytes and timing-safe compare.
-- Query/header orgid is never enough for webhook mutation.
-- Haravan tokens stay server-side and encrypted at rest.
-- App session cookies are `HttpOnly`; production cookies are `Secure` with explicit `SameSite` policy.
-- Unsafe cookie-authenticated routes enforce origin/referer validation and add CSRF token validation if cross-site cookies are required.
-- Uninstall clears Redis and DB token material and tombstones domains.
-- Public endpoints have body limits and rate limits.
-- `/livez` is public/minimal; `/readyz` is protected.
+- OAuth state and handoff codes are one-time and atomically consumed.
+- Launch HMAC and webhook HMAC use timing-safe comparison; webhook HMAC covers the raw body.
+- Webhook mutation needs a verified signature and a resolved store identity.
+- Sapo access tokens stay server-side and are encrypted at rest.
+- Unsafe admin requests need a Bearer session token and a trusted origin.
+- Uninstall nulls token columns, clears Redis state, and tombstones domains.
+- Public endpoints have body limits, rate limits, and response whitelists.
+- `/livez` is public and minimal; `/readyz` is protected.

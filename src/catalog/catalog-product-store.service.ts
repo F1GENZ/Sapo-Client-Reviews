@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
+
+const STALE_SCAN_CHUNK = 500;
 
 export type CatalogProductInput = {
   shopId: string;
@@ -79,7 +82,7 @@ export class CatalogProductStoreService {
       shopId,
       productId,
       title: toText(product.title || product.name || product.productName),
-      handle: toText(product.handle || product.productHandle),
+      handle: toText(product.handle || product.alias || product.productHandle),
       image: image || null,
       vendor: toText(product.vendor) || null,
       productType: toText(product.product_type || product.productType) || null,
@@ -88,8 +91,8 @@ export class CatalogProductStoreService {
       published:
         typeof product.published === 'boolean'
           ? product.published
-          : typeof product.published_at === 'string'
-            ? Boolean(product.published_at)
+          : typeof product.published_on === 'string' || typeof product.published_at === 'string'
+            ? Boolean(product.published_on || product.published_at)
             : null,
       rawPayload: product,
       source,
@@ -120,9 +123,9 @@ export class CatalogProductStoreService {
           typeof input.published === 'boolean' ? input.published : null,
         deletedAt: input.deletedAt ?? null,
         rawPayload:
-          input.rawPayload === undefined
-            ? null
-            : input.rawPayload,
+          input.rawPayload === undefined || input.rawPayload === null
+            ? undefined
+            : (input.rawPayload as Prisma.InputJsonValue),
         source: input.source || 'derived',
         updatedAt: BigInt(input.updatedAt || now),
       }))
@@ -133,7 +136,6 @@ export class CatalogProductStoreService {
     const shopId = rows[0].shopId;
     const productIds = rows.map((r) => r.productId);
 
-    // Fetch existing records for monotonic guard and COALESCE merges.
     const existingRecords = await this.prisma.catalogProduct.findMany({
       where: { shopId, productId: { in: productIds } },
     });
@@ -141,17 +143,15 @@ export class CatalogProductStoreService {
       existingRecords.map((e) => [e.productId, e]),
     );
 
-    const operations: Array<Promise<unknown>> = [];
+    const operations: Prisma.PrismaPromise<unknown>[] = [];
 
     for (const row of rows) {
       const prev = existingMap.get(row.productId);
 
       if (!prev) {
-        // New record — create.
         operations.push(
           this.prisma.catalogProduct.create({
             data: {
-              id: undefined as unknown as string, // let Prisma generate cuid
               shopId: row.shopId,
               productId: row.productId,
               title: row.title,
@@ -164,61 +164,55 @@ export class CatalogProductStoreService {
               published: row.published,
               deletedAt:
                 row.deletedAt !== null ? BigInt(row.deletedAt) : null,
-              rawPayload: (row.rawPayload ?? undefined) as any,
+              rawPayload: row.rawPayload,
               source: row.source,
               createdAt: new Date(),
               updatedAt: row.updatedAt,
             },
           }),
         );
-      } else {
-        // Monotonic guard: skip if existing updatedAt >= new updatedAt.
-        if (prev.updatedAt >= row.updatedAt) continue;
-
-        // COALESCE: keep existing non-empty values when new value is empty.
-        operations.push(
-          this.prisma.catalogProduct.update({
-            where: {
-              shopId_productId: {
-                shopId: row.shopId,
-                productId: row.productId,
-              },
-            },
-            data: {
-              title: row.title || prev.title,
-              handle: row.handle || prev.handle,
-              image: row.image !== undefined ? row.image : prev.image,
-              vendor: row.vendor !== undefined ? row.vendor : prev.vendor,
-              productType:
-                row.productType !== undefined
-                  ? row.productType
-                  : prev.productType,
-              tags: row.tags !== undefined ? row.tags : prev.tags,
-              status: row.status !== undefined ? row.status : prev.status,
-              published:
-                row.published !== undefined
-                  ? row.published
-                  : prev.published,
-              deletedAt:
-                row.deletedAt !== null
-                  ? BigInt(row.deletedAt)
-                  : prev.deletedAt,
-              rawPayload:
-                row.rawPayload !== undefined
-                  ? (row.rawPayload as any)
-                  : prev.rawPayload,
-              source: row.source,
-              updatedAt: row.updatedAt,
-            },
-          }),
-        );
+        continue;
       }
+
+      const reviveFromSapo =
+        row.source === 'sapo' && row.deletedAt === null && prev.deletedAt !== null;
+
+      if (!reviveFromSapo && prev.updatedAt >= row.updatedAt) continue;
+
+      let deletedAt: bigint | null = prev.deletedAt;
+      if (reviveFromSapo) deletedAt = null;
+      else if (row.deletedAt !== null) deletedAt = BigInt(row.deletedAt);
+
+      operations.push(
+        this.prisma.catalogProduct.update({
+          where: {
+            shopId_productId: {
+              shopId: row.shopId,
+              productId: row.productId,
+            },
+          },
+          data: {
+            title: row.title || prev.title,
+            handle: row.handle || prev.handle,
+            image: row.image,
+            vendor: row.vendor,
+            productType: row.productType,
+            tags: row.tags,
+            status: row.status,
+            published: row.published,
+            deletedAt,
+            rawPayload: row.rawPayload,
+            source: row.source,
+            updatedAt: row.updatedAt > prev.updatedAt ? row.updatedAt : prev.updatedAt,
+          },
+        }),
+      );
     }
 
     if (!operations.length) return;
 
     try {
-      await this.prisma.$transaction(operations as any);
+      await this.prisma.$transaction(operations);
     } catch (error) {
       this.logger.warn(
         `Catalog product upsert failed: ${
@@ -272,7 +266,7 @@ export class CatalogProductStoreService {
     const page = Math.max(1, Number(options.page) || 1);
     const search = toText(options.title);
 
-    const where: Record<string, unknown> = {
+    const where: Prisma.CatalogProductWhereInput = {
       shopId,
       deletedAt: null,
     };
@@ -353,6 +347,7 @@ export class CatalogProductStoreService {
     };
   }
 
+  // The deletedAt: null guard on the update keeps a concurrent webhook delete from being overwritten.
   async markMissingSapoProductsDeleted(
     shopId: string,
     activeProductIds: string[],
@@ -360,22 +355,30 @@ export class CatalogProductStoreService {
   ): Promise<number> {
     if (!activeProductIds.length) return 0;
 
+    const active = new Set(activeProductIds);
     const ts = BigInt(deletedAt);
-
-    const result = await this.prisma.catalogProduct.updateMany({
-      where: {
-        shopId,
-        source: 'sapo',
-        deletedAt: null,
-        productId: { notIn: activeProductIds },
-      },
-      data: {
-        deletedAt: ts,
-        updatedAt: ts,
-      },
-    });
-
-    return result.count;
+    let cursor = '';
+    let marked = 0;
+    for (;;) {
+      const rows = await this.prisma.catalogProduct.findMany({
+        where: { shopId, source: 'sapo', deletedAt: null, ...(cursor ? { id: { gt: cursor } } : {}) },
+        orderBy: { id: 'asc' },
+        take: STALE_SCAN_CHUNK,
+        select: { id: true, productId: true },
+      });
+      if (rows.length === 0) break;
+      cursor = rows[rows.length - 1].id;
+      const missing = rows.filter((row) => !active.has(row.productId)).map((row) => row.id);
+      if (missing.length > 0) {
+        const result = await this.prisma.catalogProduct.updateMany({
+          where: { id: { in: missing }, deletedAt: null },
+          data: { deletedAt: ts, updatedAt: ts },
+        });
+        marked += result.count;
+      }
+      if (rows.length < STALE_SCAN_CHUNK) break;
+    }
+    return marked;
   }
 
   private toCatalogProduct(

@@ -1,111 +1,60 @@
-{{# Sapo .bwt Theme Snippets for F1GENZ Reviews + Q&A #}}
-{{# Mode A — metafield SSR (D2 confirmed: .bwt reads shop + product metafields) #}}
-{{# Copy these snippets into your Sapo theme .bwt templates. #}}
+{% comment %}
+  F1GENZ Reviews + Q&A - copy-paste snippets for a Sapo .bwt theme.
+  Replace API_HOST with the app API URL (https://...) and STORE_DOMAIN with the store's x.mysapo.net domain.
+  The app stores the same pair in the shop metafield f1genz.config (JSON string) and as plain strings in
+  f1genz.api_url and f1genz.store_domain. No snippet here reads them: paste the two values literally.
+  The runtime fetches ratings, reviews and Q&A from the API. Only block 4b prints metafields: the two scalar
+  product metafields f1genz_reviews.rating_avg and f1genz_reviews.rating_count, guarded by an if tag.
+  Filters used: escape only. Include tags only, never slice.
+  For the SEO JSON-LD use storefront/theme/f1genz-product-schema.bwt instead of anything here.
+{% endcomment %}
 
-{{###############################################################################
-  SNIPPET 1: Global loader — paste into theme.bwt before </body>
-  Loads the web component runtime JS/CSS from your API server.
-  Requires shop.metafields.f1genz.config to be set (auto-written on app install).
-################################################################################}}
+{% comment %} 1. Global loader - layout file, before </body> {% endcomment %}
+<script>
+  window.__F1GENZ_STOREFRONT_CONFIG = {
+    apiUrl: "https://API_HOST",
+    storeDomain: "STORE_DOMAIN"
+  };
+</script>
+<link rel="stylesheet" href="https://API_HOST/storefront/f1genz-storefront.css">
+<script src="https://API_HOST/storefront/f1genz-storefront.js" defer></script>
 
-{{# ------ theme.bwt (before </body>) ------ #}}
-{{ assign f1genzConfig = shop.metafields.f1genz.config | default: "" }}
-{{ if f1genzConfig != "" }}
-  {{ assign f1genzApiUrl = f1genzConfig.apiUrl | default: "" }}
-  {{ if f1genzApiUrl != "" }}
-    <script>
-      window.__F1GENZ_STOREFRONT_CONFIG = {
-        apiUrl: "{{ f1genzApiUrl }}",
-        store: "{{ shop.domain }}"
-      };
-    </script>
-    <link rel="stylesheet" href="{{ f1genzApiUrl }}/storefront/f1genz-storefront.css">
-    <script defer src="{{ f1genzApiUrl }}/storefront/f1genz-storefront.js"></script>
-  {{ endif }}
-{{ endif }}
-
-
-{{###############################################################################
-  SNIPPET 2: Product reviews widget — paste into product.bwt
-  Renders <f1genz-reviews> web component with product ID.
-################################################################################}}
-
-{{# ------ product.bwt (reviews section) ------ #}}
+{% comment %} 2. Reviews + Q&A widget - product.bwt. customer-email and customer-phone are the only source of shopper identity; empty values mean a guest. {% endcomment %}
 <div class="f1genz-sapo-review-section">
   <f1genz-reviews
     product-id="{{ product.id }}"
-    storeDomain="{{ shop.domain }}"
-    {{ if customer }}customer-email="{{ customer.email }}"{{ endif }}
+    storeDomain="STORE_DOMAIN"
+    customer-email="{{ customer.email | escape }}"
+    customer-phone="{{ customer.phone | escape }}"
   ></f1genz-reviews>
 </div>
 
-
-{{###############################################################################
-  SNIPPET 3: Q&A panel — paste into product.bwt
-  Renders <f1genz-qna-panel> web component.
-################################################################################}}
-
-{{# ------ product.bwt (Q&A section) ------ #}}
+{% comment %} 3. Separate Q&A panel (use instead of 2 when reviews and Q&A sit in different places) {% endcomment %}
 <div class="f1genz-sapo-review-section">
   <f1genz-qna-panel
     product-id="{{ product.id }}"
-    storeDomain="{{ shop.domain }}"
+    storeDomain="STORE_DOMAIN"
+    customer-email="{{ customer.email | escape }}"
+    customer-phone="{{ customer.phone | escape }}"
   ></f1genz-qna-panel>
 </div>
 
+{% comment %} 4. Rating badge - product card / collection loop. Score is fetched in batches from the API. {% endcomment %}
+<f1genz-rating-badge
+  product-id="{{ product.id }}"
+  storeDomain="STORE_DOMAIN"
+></f1genz-rating-badge>
 
-{{###############################################################################
-  SNIPPET 4: Rating badge — paste into collection.bwt (product card) or product.bwt
-  SSR via metafield (Mode A). Only renders if public_summary exists.
-################################################################################}}
-
-{{# ------ collection.bwt / product card (rating badge) ------ #}}
-{{ assign publicSummary = product.metafields.reviews.public_summary }}
-{{ if publicSummary }}
-  {{ assign summaryObj = publicSummary | json_parse }}
-  {{ assign avg = summaryObj.avg | default: 0 }}
-  {{ assign count = summaryObj.count | default: 0 }}
-  {{ if count > 0 }}
-    <f1genz-rating-badge
-      product-id="{{ product.id }}"
-      storeDomain="{{ shop.domain }}"
-      avg-rating="{{ avg }}"
-      review-count="{{ count }}"
-      distribution='{{ publicSummary }}'
-    ></f1genz-rating-badge>
-  {{ endif }}
-{{ endif }}
-
-
-{{###############################################################################
-  SNIPPET 5: JSON-LD structured data — paste into product.bwt <head>
-  Google Rich Results compatible Product + Review aggregateRating schema.
-################################################################################}}
-
-{{# ------ product.bwt (JSON-LD in <head>) ------ #}}
-{{ assign publicSummaryLd = product.metafields.reviews.public_summary }}
-{{ if publicSummaryLd }}
-  {{ assign ld = publicSummaryLd | json_parse }}
-  {{ assign ldAvg = ld.avg | default: 0 }}
-  {{ assign ldCount = ld.count | default: 0 }}
-  {{ if ldCount > 0 }}
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "Product",
-        "name": "{{ product.title | escape }}",
-        "url": "{{ canonical_url }}",
-        "image": "{{ product.image.src }}",
-        {{ if product.vendor }}"brand": { "@type": "Brand", "name": "{{ product.vendor | escape }}" },{{ endif }}
-        {{ if product.sku }}"sku": "{{ product.sku }}",{{ endif }}
-        "aggregateRating": {
-          "@type": "AggregateRating",
-          "ratingValue": "{{ ldAvg }}",
-          "reviewCount": "{{ ldCount }}",
-          "bestRating": "5",
-          "worstRating": "1"
-        }
-      }
-    </script>
-  {{ endif }}
-{{ endif }}
+{% comment %}
+  4b. Optional server-rendered badge, use INSTEAD of 4 (not in addition). Prints the two scalar metafields the app
+  writes (f1genz_reviews.rating_avg string, f1genz_reviews.rating_count integer) behind an if tag guard;
+  renders nothing while the metafield is missing.
+{% endcomment %}
+{% if product.metafields.f1genz_reviews.rating_count %}
+<f1genz-rating-badge
+  product-id="{{ product.id }}"
+  storeDomain="STORE_DOMAIN"
+  avg-rating="{{ product.metafields.f1genz_reviews.rating_avg }}"
+  review-count="{{ product.metafields.f1genz_reviews.rating_count }}"
+></f1genz-rating-badge>
+{% endif %}

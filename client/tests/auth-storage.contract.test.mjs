@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import {
   clearAuthSession,
   consumePostAuthRedirect,
-  getActiveOrgid,
-  getOrgid,
+  getActiveStoreDomain,
+  getStoreDomain,
   getSessionToken,
   setAuthSession,
   setPostAuthRedirect,
@@ -36,7 +36,7 @@ const cookieJar = new Map();
 const localStorage = new MemoryStorage();
 const sessionStorage = new MemoryStorage();
 
-function resetBrowserState(search = '?orgid=shop-a') {
+function resetBrowserState(search = '?storeDomain=shop-a.mysapo.net') {
   cookieJar.clear();
   localStorage.clear();
   sessionStorage.clear();
@@ -77,38 +77,61 @@ function resetBrowserState(search = '?orgid=shop-a') {
 
 test.beforeEach(() => {
   resetBrowserState();
-  clearAuthSession('shop-a');
-  clearAuthSession('shop-b');
+  clearAuthSession('shop-a.mysapo.net');
+  clearAuthSession('shop-b.mysapo.net');
 });
 
-test('scopes auth session tokens by orgid so one org cannot satisfy another', () => {
-  setAuthSession('shop-a', 'session-a');
-  setAuthSession('shop-b', 'session-b');
+test('scopes auth session tokens by storeDomain so one store cannot satisfy another', () => {
+  setAuthSession('shop-a.mysapo.net', 'session-a');
+  setAuthSession('shop-b.mysapo.net', 'session-b');
 
-  assert.equal(getSessionToken('shop-a'), 'session-a');
-  assert.equal(getSessionToken('shop-b'), 'session-b');
-  assert.notEqual(getSessionToken('shop-a'), getSessionToken('shop-b'));
+  assert.equal(getSessionToken('shop-a.mysapo.net'), 'session-a');
+  assert.equal(getSessionToken('shop-b.mysapo.net'), 'session-b');
+  assert.notEqual(getSessionToken('shop-a.mysapo.net'), getSessionToken('shop-b.mysapo.net'));
 });
 
-test('ignores invalid orgid values from the URL during session sync', () => {
-  resetBrowserState('?orgid=../../bad');
+test('ignores invalid storeDomain values from the URL during session sync', () => {
+  resetBrowserState('?storeDomain=../../bad');
   sessionStorage.setItem('auth_session_token', 'legacy-token');
   sessionStorage.setItem('auth_verified', '1');
 
   syncAuthSession();
 
-  assert.equal(getOrgid(), null);
-  assert.equal(getActiveOrgid(), null);
+  assert.equal(getStoreDomain(), null);
+  assert.equal(getActiveStoreDomain(), null);
   assert.equal(getSessionToken('../../bad'), null);
 });
 
+test('rejects a bare shop handle and normalizes case on a dotted Sapo domain', () => {
+  resetBrowserState('?storeDomain=shop-a');
+  syncAuthSession();
+  assert.equal(getStoreDomain(), null);
+  setAuthSession('shop-a', 'bare-token');
+  assert.equal(getActiveStoreDomain(), null);
+  assert.equal(getSessionToken('shop-a'), null);
+
+  resetBrowserState('?storeDomain=Shop-A.MySapo.net');
+  assert.equal(getStoreDomain(), 'shop-a.mysapo.net');
+});
+
 test('never stores or consumes post-auth redirects back into /install or /oauth', () => {
-  setPostAuthRedirect('/install/login?orgid=shop-a');
-  assert.equal(consumePostAuthRedirect('shop-a'), null);
+  setPostAuthRedirect('/install/login?storeDomain=shop-a.mysapo.net');
+  assert.equal(consumePostAuthRedirect('shop-a.mysapo.net'), null);
 
   setPostAuthRedirect('/oauth/callback?code=123');
-  assert.equal(consumePostAuthRedirect('shop-a'), null);
+  assert.equal(consumePostAuthRedirect('shop-a.mysapo.net'), null);
 
   setPostAuthRedirect('/reviews?tab=spam');
-  assert.equal(consumePostAuthRedirect('shop-a'), '/reviews?tab=spam');
+  assert.equal(consumePostAuthRedirect('shop-a.mysapo.net'), '/reviews?tab=spam');
+});
+
+test('keeps the session token out of JS-readable cookies', () => {
+  setAuthSession('shop-a.mysapo.net', 'session-a');
+
+  assert.equal(cookieJar.size, 0);
+  assert.equal(localStorage.getItem('auth_session_token:shop-a.mysapo.net'), 'session-a');
+  assert.equal(getSessionToken('shop-a.mysapo.net'), 'session-a');
+
+  clearAuthSession('shop-a.mysapo.net');
+  assert.equal(getSessionToken('shop-a.mysapo.net'), null);
 });

@@ -1,11 +1,14 @@
-import { Controller, Get, Headers, Inject, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Headers, Inject, Logger, UnauthorizedException } from '@nestjs/common';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
 import { PrismaService } from '../database/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { countRecentFailures, deriveHealthVerdict, FAILURE_WINDOW_MINUTES } from './health-verdict';
 
 @Controller()
 export class HealthController {
+  private readonly logger = new Logger(HealthController.name);
+
   constructor(
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly prisma: PrismaService,
@@ -24,27 +27,52 @@ export class HealthController {
       throw new UnauthorizedException('Invalid readiness token');
     }
 
-    const [redisOk, dbOk, webhookStatuses] = await Promise.all([
-      this.redis.ping().catch(() => false),
-      this.prisma.ping().catch(() => false),
-      (this.prisma as any).appInstall.groupBy({
+    const failedProbes: string[] = [];
+    const [redisOk, dbOk] = await Promise.all([
+      this.redis.ping().catch((error: unknown) => {
+        this.logger.warn(`Redis ping failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }),
+      this.prisma.ping().catch((error: unknown) => {
+        this.logger.warn(`Database ping failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }),
+    ]);
+    const webhookRegistration: Record<string, number> = {};
+    try {
+      const groups = await this.prisma.appInstall.groupBy({
         by: ['webhookRegistrationStatus'],
         _count: { _all: true },
-      }).catch(() => [] as Array<{ webhookRegistrationStatus: string; _count: { _all: number } }>),
-    ]);
-    const webhookRegistration = Object.fromEntries(
-      (webhookStatuses as Array<{ webhookRegistrationStatus: string; _count: { _all: number } }>).map((item) => [
-        item.webhookRegistrationStatus,
-        item._count._all,
-      ]),
-    );
+      });
+      for (const group of groups) webhookRegistration[group.webhookRegistrationStatus] = group._count._all;
+    } catch (error) {
+      failedProbes.push('webhookRegistration');
+      this.logger.warn(`Webhook registration probe failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const webhookDegraded = Boolean(webhookRegistration.degraded || webhookRegistration.failed);
+    let recentFailures = 0;
+    if (dbOk) {
+      try {
+        recentFailures = await countRecentFailures(this.prisma);
+      } catch (error) {
+        failedProbes.push('recentFailures');
+        this.logger.warn(`Recent failure probe failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const verdict = deriveHealthVerdict({
+      healthy: redisOk && dbOk,
+      recentFailures,
+      probeFailed: failedProbes.length > 0,
+    });
     return {
-      ok: redisOk && dbOk,
+      ...verdict,
       redis: redisOk ? 'ok' : 'failed',
       db: dbOk ? 'ok' : 'failed',
+      recentFailures,
+      failureWindowMinutes: FAILURE_WINDOW_MINUTES,
       webhookRegistration,
       webhookDegraded,
+      failedProbes,
       build: this.env.BUILD_SHA,
     };
   }

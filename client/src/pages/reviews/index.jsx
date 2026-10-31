@@ -12,8 +12,9 @@ import {
   updateReview,
   updateReviewStatus,
 } from "../../common/ApiService";
-import { getOrgid } from "../../common/AuthStorage";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { shopQueryKeys } from "../../common/queryKeys";
+import { buildProductUrl } from "../../common/storeUrl";
 import AdminLayout from "../../components/layout/AdminLayout";
 import StatCard from "../../components/dashboard/StatCard";
 import ReviewCard from "../../components/review/ReviewCard";
@@ -49,7 +50,7 @@ import {
   UnorderedListOutlined,
 } from "@ant-design/icons";
 import { useSearchParams } from "react-router-dom";
-import Link from "../../components/OrgLink";
+import Link from "../../components/StoreLink";
 
 const { Text, Title } = Typography;
 const { useBreakpoint } = Grid;
@@ -129,7 +130,7 @@ ReviewTableRow.displayName = "ReviewTableRow";
 
 const ReviewsPage = () => {
   const queryClient = useQueryClient();
-  const orgid = getOrgid();
+  const storeDomain = getStoreDomain();
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -148,27 +149,27 @@ const ReviewsPage = () => {
   const [selectedProductSnapshot, setSelectedProductSnapshot] = useState(null);
 
   const { data: productsData } = useQuery({
-    queryKey: shopQueryKeys.products(orgid, { limit: 50 }),
+    queryKey: shopQueryKeys.products(storeDomain, { limit: 50 }),
     queryFn: () => fetchProducts({ limit: 50 }),
     staleTime: 5 * 60 * 1000,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
 
   const { data: searchedProductsData } = useQuery({
-    queryKey: shopQueryKeys.products(orgid, {
+    queryKey: shopQueryKeys.products(storeDomain, {
       limit: 50,
       title: productSearchQuery,
     }),
     queryFn: () => fetchProducts({ limit: 50, title: productSearchQuery }),
     staleTime: 60 * 1000,
-    enabled: !!orgid && productSearchQuery.length >= 2,
+    enabled: !!storeDomain && productSearchQuery.length >= 2,
   });
 
   const { data: overview } = useQuery({
-    queryKey: shopQueryKeys.dashboardOverview(orgid),
+    queryKey: shopQueryKeys.dashboardOverview(storeDomain),
     queryFn: fetchDashboardOverview,
     staleTime: 5 * 60 * 1000,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
 
   const statsMap = useMemo(() => {
@@ -224,9 +225,9 @@ const ReviewsPage = () => {
   );
 
   const { data: selectedProductDetails } = useQuery({
-    queryKey: shopQueryKeys.product(orgid, selectedProduct),
+    queryKey: shopQueryKeys.product(storeDomain, selectedProduct),
     queryFn: () => fetchProduct(selectedProduct),
-    enabled: !!orgid && !!selectedProduct && !productInList,
+    enabled: !!storeDomain && !!selectedProduct && !productInList,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -252,9 +253,7 @@ const ReviewsPage = () => {
     : "Tất cả đánh giá";
 
   const selectedProductLiveUrl =
-    selectedProductInfo?.handle && orgid
-      ? `https://${orgid}/products/${selectedProductInfo.handle}`
-      : null;
+    buildProductUrl(storeDomain, selectedProductInfo?.handle) || null;
 
   const handleProductChange = useCallback((value, product = null) => {
     if (product) setSelectedProductSnapshot(product);
@@ -263,10 +262,10 @@ const ReviewsPage = () => {
     setStarFilter(null);
     setActiveTab("all");
     setPage(1);
-    const nextParams = orgid ? { orgid } : {};
+    const nextParams = storeDomain ? { storeDomain } : {};
     if (value) nextParams.product = value;
     setSearchParams(nextParams, { replace: true });
-  }, [orgid, setSearchParams]);
+  }, [storeDomain, setSearchParams]);
 
   const handleOpenCreateModal = useCallback(() => {
     setCreateModalProductId(selectedProduct || null);
@@ -274,7 +273,7 @@ const ReviewsPage = () => {
   }, [selectedProduct]);
 
   const { data: productReviews = [], isLoading: productReviewsLoading } = useQuery({
-    queryKey: shopQueryKeys.reviews(orgid, selectedProduct),
+    queryKey: shopQueryKeys.reviews(storeDomain, selectedProduct),
     queryFn: () => fetchReviews(selectedProduct),
     enabled: !!selectedProduct,
     staleTime: 5 * 60 * 1000,
@@ -292,9 +291,9 @@ const ReviewsPage = () => {
   );
 
   const { data: allReviewsData, isLoading: allReviewsLoading } = useQuery({
-    queryKey: shopQueryKeys.allReviews(orgid, allReviewsParams),
+    queryKey: shopQueryKeys.allReviews(storeDomain, allReviewsParams),
     queryFn: () => fetchAllReviews(allReviewsParams),
-    enabled: !selectedProduct && !!orgid,
+    enabled: !selectedProduct && !!storeDomain,
     staleTime: 5 * 60 * 1000,
     placeholderData: keepPreviousData,
     retry: false,
@@ -381,7 +380,7 @@ const ReviewsPage = () => {
   }, [productLookup, selectedProduct]);
 
   const { data: summary } = useQuery({
-    queryKey: shopQueryKeys.reviewSummary(orgid, selectedProduct),
+    queryKey: shopQueryKeys.reviewSummary(storeDomain, selectedProduct),
     queryFn: () => fetchReviewSummary(selectedProduct),
     enabled: !!selectedProduct,
     staleTime: 5 * 60 * 1000,
@@ -480,31 +479,31 @@ const ReviewsPage = () => {
   const invalidateAll = useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({
-        queryKey: shopQueryKeys.reviews(orgid, selectedProduct),
+        queryKey: shopQueryKeys.reviews(storeDomain, selectedProduct),
       }),
       queryClient.invalidateQueries({
-        queryKey: shopQueryKeys.allReviewsRoot(orgid),
+        queryKey: shopQueryKeys.allReviewsRoot(storeDomain),
       }),
       queryClient.invalidateQueries({
-        queryKey: shopQueryKeys.reviewSummary(orgid, selectedProduct),
+        queryKey: shopQueryKeys.reviewSummary(storeDomain, selectedProduct),
       }),
       queryClient.invalidateQueries({
-        queryKey: shopQueryKeys.dashboardOverview(orgid),
+        queryKey: shopQueryKeys.dashboardOverview(storeDomain),
       }),
     ]);
-  }, [orgid, queryClient, selectedProduct]);
+  }, [storeDomain, queryClient, selectedProduct]);
 
   const getProductId = useCallback((review) => review.productId || selectedProduct, [selectedProduct]);
 
   const patchReviewCaches = useCallback((productId, reviewId, updater) => {
     if (productId) {
-      queryClient.setQueryData(shopQueryKeys.reviews(orgid, productId), (current) =>
+      queryClient.setQueryData(shopQueryKeys.reviews(storeDomain, productId), (current) =>
         Array.isArray(current)
           ? current.map((review) => (review.id === reviewId ? updater(review) : review))
           : current,
       );
     }
-    queryClient.setQueryData(shopQueryKeys.allReviews(orgid, allReviewsParams), (current) =>
+    queryClient.setQueryData(shopQueryKeys.allReviews(storeDomain, allReviewsParams), (current) =>
       current?.items
         ? {
             ...current,
@@ -516,15 +515,15 @@ const ReviewsPage = () => {
           }
         : current,
     );
-  }, [allReviewsParams, orgid, queryClient]);
+  }, [allReviewsParams, storeDomain, queryClient]);
 
   const removeReviewFromCaches = useCallback((productId, reviewId) => {
     if (productId) {
-      queryClient.setQueryData(shopQueryKeys.reviews(orgid, productId), (current) =>
+      queryClient.setQueryData(shopQueryKeys.reviews(storeDomain, productId), (current) =>
         Array.isArray(current) ? current.filter((review) => review.id !== reviewId) : current,
       );
     }
-    queryClient.setQueryData(shopQueryKeys.allReviews(orgid, allReviewsParams), (current) =>
+    queryClient.setQueryData(shopQueryKeys.allReviews(storeDomain, allReviewsParams), (current) =>
       current?.items
         ? {
             ...current,
@@ -536,13 +535,13 @@ const ReviewsPage = () => {
           }
         : current,
     );
-  }, [allReviewsParams, orgid, queryClient]);
+  }, [allReviewsParams, storeDomain, queryClient]);
 
-  const getProductUrl = useCallback((review) => {
-    const handle = review.productHandle || selectedProductInfo?.handle;
-    if (!handle || !orgid) return null;
-    return `https://${orgid}/products/${handle}`;
-  }, [selectedProductInfo?.handle, orgid]);
+  const getProductUrl = useCallback(
+    (review) =>
+      buildProductUrl(storeDomain, review.productHandle || selectedProductInfo?.handle) || null,
+    [selectedProductInfo?.handle, storeDomain],
+  );
 
   const handleDelete = useCallback(async (reviewId, review) => {
     const productId = getProductId(review);

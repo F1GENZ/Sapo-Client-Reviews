@@ -1,163 +1,113 @@
 # Environment Contract
 
-This file defines variable names, validation rules, and production safety defaults for `haravan-app-base`. Values in `.env.example` are placeholders only.
+Every variable the server reads is parsed and validated once at boot by `loadEnv` in `src/config/env.schema.ts`. Invalid values throw and the process exits with the list of problems. `.env.example` holds placeholders only; the server loads `./.env` itself before validation (`src/config/app-config.module.ts`, variables already in the environment win), and PM2 also starts Node with `--env-file=.env` (see `ecosystem.config.cjs`).
 
 ## Principles
 
 - No production secret has a real default.
-- Production starts fail closed when required OAuth/OIDC/session/DB/Redis values are missing.
-- OIDC verification must not infer issuer/JWKS from untrusted callback data.
-- Webhook verification must not run without a configured secret when webhook ingress is enabled.
-- Body limits and rate limits are core ingress controls, not optional recipes.
+- Production fails closed: missing or placeholder values stop the boot.
+- Integer and boolean values that do not parse are errors, never a silent fallback.
+- `APP_SESSION_SECRET` and `SAPO_CLIENT_SECRET` must be distinct in every environment. Webhooks are verified with `SAPO_CLIENT_SECRET`; there is no separate webhook secret.
+- Secret rules (`src/config/secret-guard.ts`, `src/config/env.schema.ts`): an EMPTY secret is rejected in production by `loadEnv`, and the services that use `SAPO_CLIENT_SECRET`, `APP_SESSION_SECRET` and `DATA_ENCRYPTION_KEY` (`HmacVerifierService`, `SessionService`, `TokenEncryptionService`) throw on an empty or placeholder value in every `NODE_ENV` when they are constructed. A SET value that is a placeholder, shorter than its minimum, or (for the encryption key) not exactly 32 bytes or the public sample key is rejected by `loadEnv` in every `NODE_ENV`, not only in production.
 
-## Variable Groups
+"Production" below means `NODE_ENV=production`. "Explicit" means the variable must be present in the environment even though a default exists, so a deploy cannot inherit a development default by accident.
 
-### App Runtime
+## App runtime
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `NODE_ENV` | Yes | `development` | `development`, `test`, or `production`. |
-| `PORT` | Yes | `3333` | Integer `1..65535`. |
-| `FRONTEND_URL` | Yes | `https://app.example.com` | Absolute `http(s)` origin. Use HTTPS in production. |
-| `API_BASE_URL` | Yes | `https://api.example.com` | Absolute `http(s)` origin. Use HTTPS in production. |
-| `CORS_ALLOWED_ORIGINS` | Yes | `https://app.example.com` | Comma-separated absolute origins. |
-| `TRUST_PROXY` | Production deploy dependent | `false` | `false`, integer hop count, or named trusted proxy setting. Do not use bare `true`. |
-| `REQUEST_BODY_LIMIT` | Yes | `1mb` | Express-compatible body limit; must be finite. |
-| `WEBHOOK_BODY_LIMIT` | Yes | `256kb` | Lower than generic API limit. |
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `NODE_ENV` | `development` | set to `production` | `development`, `test`, or `production`. |
+| `PORT` | `3000` | explicit | Integer 1-65535. |
+| `FRONTEND_URL` | `http://localhost:5173` | required, HTTPS | Absolute URL. Admin SPA origin; target of post-login redirects. |
+| `API_BASE_URL` | `http://localhost:3000` | required, HTTPS | Absolute URL. Also used to build the webhook URL registered with Sapo. |
+| `CORS_ALLOWED_ORIGINS` | empty | required, non-empty | Comma-separated origins, HTTPS in production. Admin origins allowed with credentials: `FRONTEND_URL`, `API_BASE_URL`, and this list. |
+| `TRUST_PROXY` | `false` | required, explicit | Must be present and non-empty in the production environment; `false` is a valid explicit value (app directly exposed). Accepted values: `false`/`0`, a hop count 1-10, or a comma list of proxy IPs, CIDRs, `loopback`, `linklocal`, `uniquelocal`. `true` and malformed values fail boot. In production with `false` the server logs a warning, because behind a proxy all clients share the proxy address and one rate-limit bucket. Set a hop count only after observing the real proxy chain. |
+| `REQUEST_BODY_LIMIT` | `1mb` | explicit | `<number>b`, `kb`, or `mb`. |
+| `WEBHOOK_BODY_LIMIT` | `256kb` | explicit | Same format; applied to `/api/oauth/install/webhooks`. |
 
-### Haravan OAuth
+## Sapo OAuth and webhooks
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `HRV_CLIENT_ID` | Yes | `replace-with-client-id` | Non-empty. |
-| `HRV_CLIENT_SECRET` | Yes | `replace-with-client-secret` | Non-empty secret; never committed with real value. |
-| `HRV_URL_AUTHORIZE` | Yes | `https://accounts.haravan.com/connect/authorize` | Absolute HTTPS URL. |
-| `HRV_URL_CONNECT_TOKEN` | Yes | `https://accounts.haravan.com/connect/token` | Absolute HTTPS URL. |
-| `HRV_SCOPE_LOGIN` | Yes | `openid profile email org userinfo` | Must include only login-safe scopes. |
-| `HRV_SCOPE_INSTALL` | Yes | `openid profile email org userinfo grant_service wh_api` | Must include `grant_service` for install lifecycle and `wh_api` when auto webhooks enabled. |
-| `HRV_LOGIN_CALLBACK_URL` | Yes | `https://api.example.com/api/oauth/install/login/callback` | Must match Haravan app settings. |
-| `HRV_INSTALL_CALLBACK_URL` | Yes | `https://api.example.com/api/oauth/install/grandservice` | Must match Haravan app settings. |
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `SAPO_CLIENT_ID` | empty | required | Not a placeholder. |
+| `SAPO_CLIENT_SECRET` | empty | required | Verifies the admin launch HMAC and authenticates the code exchange. Not a placeholder. |
+| `SAPO_SCOPE` | `read_products,write_products,read_orders` | explicit | Whitespace or commas are accepted and normalized to a comma list. |
+| `SAPO_INSTALL_CALLBACK_URL` | empty | required, HTTPS | Absolute URL, `{API}/api/oauth/install/callback`. |
+| `SAPO_LOGIN_CALLBACK_URL` | empty | required, HTTPS | Absolute URL, `{API}/api/oauth/install/login/callback`. |
+| `SAPO_API_MAX_CONCURRENT` | `4` | explicit | Integer >= 1. Per-store concurrent foreground Sapo API calls. |
 
-### OAuth/OIDC Controls
+## Sessions
 
-Canonical names use `HRV_ISSUER_URL`, not source-app aliases.
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `APP_SESSION_SECRET` | empty | required | At least 32 bytes in production; not a placeholder. Signs the session JWT. |
+| `APP_SESSION_TTL_SECONDS` | `43200` (12 h) | explicit | Integer >= 300. Session token and cookie lifetime. |
+| `SESSION_HANDOFF_TTL_SECONDS` | `120` | explicit | Integer >= 30. One-time handoff code lifetime. |
+| `SESSION_COOKIE_NAME` | `sapo_app_session` | optional | HttpOnly cookie name. |
+| `SESSION_COOKIE_DOMAIN` | empty | optional | Cookie `Domain`; omit for a host-only cookie. |
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `HRV_GRANT_TYPE_INSTALL` | Yes | `authorization_code` | Usually `authorization_code`. |
-| `HRV_GRANT_TYPE_REFRESH` | Yes | `refresh_token` | Usually `refresh_token`. |
-| `HRV_RESPONSE_TYPE` | Yes | `code` | Usually `code`. |
-| `HRV_RESPONSE_MODE` | Yes | `query` | Usually `query`. |
-| `HRV_ISSUER_URL` | Yes | `https://accounts.haravan.com` | OIDC issuer, no trailing slash after normalization. |
-| `HRV_OIDC_DISCOVERY_URL` | Yes unless `HRV_JWKS_URL` set | `https://accounts.haravan.com/.well-known/openid-configuration` | Absolute HTTPS URL. |
-| `HRV_JWKS_URL` | Yes unless discovery provides `jwks_uri` | `https://accounts.haravan.com/.well-known/openid-configuration/jwks` | Absolute HTTPS URL. |
+Cookie flags are derived, not configured: `HttpOnly`, `Path=/`, `Secure` in production or when the frontend and API are on different sites, `SameSite=None` for cross-site and `Lax` for same-site (`src/sapo/session.service.ts`).
 
-Compatibility note: source apps used `HRV_OIDC_ISSUER` in places. The base may read it only as a migration alias, but docs and `.env.example` use `HRV_ISSUER_URL`.
+## Redis
 
-### Webhooks
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `REDIS_HOST` | empty | required | With no host the server uses in-process memory (tests only; state is lost on restart and not shared). |
+| `REDIS_PORT` | `6379` | explicit | Integer 1-65535. |
+| `REDIS_USERNAME` | empty | optional | ACL username. |
+| `REDIS_PASSWORD` | empty | when Redis requires auth | Not a placeholder in production. A value starting with `replace-with` is ignored. |
+| `REDIS_TLS` | `false` | per provider | `true/false/1/0/yes/no/on/off`. |
+| `REDIS_KEY_PREFIX` | `sapo-app-base` | explicit | Lowercase letters, digits, and hyphens, starting with a letter or digit. Give each app and environment sharing a Redis its own prefix. |
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `HRV_WEBHOOK_URL` | Required when auto subscribe enabled | `https://api.example.com/api/oauth/install/webhooks` | Public HTTPS URL. |
-| `HRV_WEBHOOK_SECRET` | Yes | `replace-with-webhook-hmac-secret` | Used only for POST raw-body HMAC verification. |
-| `HRV_WEBHOOK_VERIFY_TOKEN` | Yes | `replace-with-webhook-verify-token` | Used only for GET challenge `hub.verify_token`; must differ from `HRV_WEBHOOK_SECRET`. |
-| `HRV_WEBHOOK_AUTO_SUBSCRIBE` | Yes | `true` | Must be explicitly `true` or `false`. If true, install attempts registration. |
+## Database and encryption
 
-If `HRV_WEBHOOK_AUTO_SUBSCRIBE=false`, the POST webhook endpoint is still part of V1 core and still requires `HRV_WEBHOOK_SECRET`; the GET challenge still requires `HRV_WEBHOOK_VERIFY_TOKEN`. `HRV_WEBHOOK_URL` is required only when the app should register webhooks automatically.
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `DATABASE_URL` | empty | required | PostgreSQL URL. Not a placeholder. |
+| `DIRECT_URL` | empty | required | Required by `directUrl = env("DIRECT_URL")` in `prisma/schema.prisma`; used by migrations. Not a placeholder. |
+| `DATA_ENCRYPTION_KEY` | empty | required | 32 bytes as 64 hex characters or base64. AES-256-GCM key for Sapo access tokens; also the root for the HKDF-derived key of the buyer email/phone hashes. The public sample key (base64 `MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=` and its hex form) is rejected in every `NODE_ENV`: generate your own. Not a placeholder. |
 
-### Sessions
+## Media upload
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `APP_SESSION_SECRET` | Yes | `replace-with-32-byte-random-secret` | At least 32 bytes of entropy. Not equal to Haravan client secret. |
-| `APP_SESSION_TTL_SECONDS` | Yes | `43200` | Minimum 300 seconds. |
-| `SESSION_HANDOFF_TTL_SECONDS` | Yes | `120` | Short TTL, recommended `60..300`. |
-| `SESSION_COOKIE_NAME` | No | `haravan_app_session` | HttpOnly cookie name. |
-| `SESSION_COOKIE_DOMAIN` | Deploy dependent | blank | Optional; omit for same-origin deployment. |
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `R2_WORKER_URL` | empty | optional (all or none) | Cloudflare Worker that stores, deletes and lists media (`worker/`). |
+| `R2_UPLOAD_SECRET` | empty | optional (all or none) | At least 32 bytes, not a placeholder. Signs upload tickets (the ticket HMAC key is derived from it with a context label) and authenticates the server to the Worker in the `X-Upload-Token` header. The Worker's `UPLOAD_SECRET` secret must hold the same value. |
+| `R2_PUBLIC_DOMAIN` | empty | optional (all or none) | Public host serving uploaded images. |
 
-Cookie policy is part of the auth contract: `HttpOnly`; `Secure` in production; `SameSite=Lax` for same-site deployments; `SameSite=None; Secure` only for intentional cross-site deployments. Unsafe cookie-authenticated routes must validate `Origin`/`Referer` and add CSRF token validation when cross-site cookies are required.
+Set all three or none. When none is set the server boots, upload tickets cannot be issued, review-media deletion and the orphan sweep are skipped, and it logs `Media upload is not configured` (`src/media/media.service.ts`, `src/ops/durability-sweep.service.ts`). When any one is set, `loadEnv` requires the other two in every `NODE_ENV`, and `R2_UPLOAD_SECRET` must be at least 32 bytes and not a placeholder (the same guard as `APP_SESSION_SECRET`): it also authorizes Worker `DELETE` and `GET /list`, so a guessable value exposes every store's media. The server calls three Worker routes, all authenticated with `X-Upload-Token`: `PUT /<key>` (upload), `DELETE /<key>` (delete one object) and `GET /list?prefix=&cursor=&limit=` (list objects under `reviews/`, used by the orphan sweep); see `worker/src/index.js`.
 
-### Redis
+## Rate limits
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `REDIS_HOST` | Yes | `redis.example.internal` | Non-empty. |
-| `REDIS_PORT` | Yes | `6379` | Integer `1..65535`. |
-| `REDIS_USERNAME` | No | blank | Optional ACL username. |
-| `REDIS_PASSWORD` | Deploy dependent | `replace-with-redis-password` | Required if Redis requires auth. |
-| `REDIS_TLS` | Production deploy dependent | `false` | Boolean. |
-| `REDIS_KEY_PREFIX` | Yes | `haravan-app-base` | Lowercase prefix without spaces. |
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | `60` | explicit | Integer >= 1. Window for OAuth, launch, logout, and session-exchange routes. |
+| `AUTH_RATE_LIMIT_MAX` | `60` | explicit | Integer >= 1. Requests per client per window on those routes. |
+| `SESSION_EXCHANGE_RATE_LIMIT_MAX` | `60` | explicit | Integer >= 1. Cap for `POST /api/auth/session/exchange` within the auth window. |
+| `PUBLIC_WRITE_RATE_LIMIT_WINDOW_SECONDS` | `60` | explicit | Integer >= 1. Window for public review, question, and upload submissions. |
+| `PUBLIC_WRITE_RATE_LIMIT_MAX` | `20` | explicit | Integer >= 1. Submissions per store and client per window. |
 
-Redis production paths must use SCAN or indexed keys, never `KEYS`.
+Anonymous `/api/public` reads and writes also have fixed per-client budgets defined in `src/common/security/public-rate-limit.ts` (not configurable by env); reads are limited per client only, with no per-store read cap.
 
-### Database
+## Readiness
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `DATABASE_URL` | Yes | `postgresql://user:password@host:5432/db?schema=public` | PostgreSQL connection URL. Placeholder only. |
-| `DIRECT_URL` | Yes | `postgresql://user:password@host:5432/db?schema=public` | Required because Prisma schema declares `directUrl = env("DIRECT_URL")`. |
-| `DATA_ENCRYPTION_KEY` | Yes | `replace-with-base64-32-byte-key` | 32-byte key, base64 or hex per implementation. |
+| Name | Default | Production | Rule |
+|---|---|---|---|
+| `READINESS_TOKEN` | empty | required | Bearer token for `GET /readyz`. `/livez` is never protected. Not a placeholder. |
+| `BUILD_SHA` | `local` | optional | Build label returned by `/readyz`. |
 
-### Public Ingress Limits
+## Production fail-closed summary
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Yes | `60` | Integer >= 1. |
-| `AUTH_RATE_LIMIT_MAX` | Yes | `60` | Integer >= 1. |
-| `WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` | Yes | `60` | Integer >= 1. |
-| `WEBHOOK_RATE_LIMIT_MAX` | Yes | `300` | Integer >= 1. |
-| `SESSION_EXCHANGE_RATE_LIMIT_MAX` | Yes | `60` | Integer >= 1. |
-| `PUBLIC_WRITE_RATE_LIMIT_WINDOW_SECONDS` | Yes | `60` | Integer >= 1. Window for public review/question submissions per store + client. |
-| `PUBLIC_WRITE_RATE_LIMIT_MAX` | Yes | `20` | Integer >= 1. Max submissions allowed per window. |
+Boot fails in production when:
 
-### Readiness
+- any variable marked required is empty, or any variable marked explicit is not present in the environment;
+- a URL is not an absolute HTTPS URL, or a CORS origin is not HTTPS;
+- a secret-like value (`SAPO_CLIENT_ID`, `REDIS_PASSWORD`, `DATABASE_URL`, `DIRECT_URL`, `READINESS_TOKEN`) contains `replace-with`, `change-me`, `changeme`, `placeholder`, `your-`, or `todo` (for `SAPO_CLIENT_SECRET`, `APP_SESSION_SECRET` and `DATA_ENCRYPTION_KEY` this check runs in every `NODE_ENV`);
+- `APP_SESSION_SECRET` is shorter than 32 bytes, or `DATA_ENCRYPTION_KEY` does not decode to exactly 32 bytes or is the public sample key (both checks run in every `NODE_ENV`);
+- `APP_SESSION_SECRET` equals `SAPO_CLIENT_SECRET` (also checked in every `NODE_ENV`).
 
-| Name | Required in production | Example placeholder | Rule |
-|---|---:|---|---|
-| `READINESS_TOKEN` | Yes | `replace-with-monitoring-token` | Protects `/readyz`. Must not protect `/livez`. |
-| `BUILD_SHA` | No | `local` | Build metadata only; safe to expose through protected readiness. |
+`SAPO_API_MIN_INTERVAL_MS` no longer exists: it was removed together with the background request limiter, and the server ignores it if it is still present in an old `.env`. Delete the line.
 
-## Production Fail-Closed Rules
+## `.env.example` policy
 
-Server must refuse to start in `NODE_ENV=production` when any of these are missing:
-
-- App runtime: `FRONTEND_URL`, `API_BASE_URL`, `CORS_ALLOWED_ORIGINS`, body limits.
-- OAuth: client id/secret, authorize URL, token URL, callback URLs, grant/response values.
-- OIDC: issuer plus either discovery or JWKS URL.
-- Sessions: app session secret and TTLs.
-- Redis: host, port, prefix.
-- DB: `DATABASE_URL`, `DIRECT_URL`, `DATA_ENCRYPTION_KEY`.
-- Public ingress limits: all auth/webhook/session exchange rate-limit variables, plus `PUBLIC_WRITE_RATE_LIMIT_WINDOW_SECONDS` and `PUBLIC_WRITE_RATE_LIMIT_MAX` for public storefront write endpoints.
-- Webhook: explicit `HRV_WEBHOOK_AUTO_SUBSCRIBE`, `HRV_WEBHOOK_SECRET`, `HRV_WEBHOOK_VERIFY_TOKEN`, and `HRV_WEBHOOK_URL` when auto subscribe is true.
-- Readiness: `READINESS_TOKEN`.
-
-Production validation must error on invalid integer/boolean values instead of silently falling back to defaults. Every CORS origin must be an absolute HTTPS origin in production. `APP_SESSION_SECRET` must be at least 32 bytes and `DATA_ENCRYPTION_KEY` must decode to exactly 32 bytes from base64 or hex.
-
-## Development Defaults
-
-Development may use safe local defaults for non-secrets:
-
-- `NODE_ENV=development`
-- `PORT=3333`
-- `FRONTEND_URL=http://localhost:5173`
-- `API_BASE_URL=http://localhost:3333`
-- local body/rate limits
-
-Development must still require placeholders for Haravan client secret, session secret, webhook secret, DB encryption key, and Redis password when those services are exercised.
-
-## `.env.example` Policy
-
-`.env.example` may contain:
-
-- variable names
-- fake placeholders
-- localhost URLs
-- obvious non-secret sample values
-
-It must not contain:
-
-- real Haravan app credentials
-- real Redis/DB URLs
-- real domains from existing apps
-- access tokens or refresh tokens
-- copied source-app `.env` values
+It may contain variable names, `replace-with-...` placeholders, localhost URLs, and non-secret sample values. It must not contain real Sapo credentials, real Redis or database URLs, real production domains, access tokens, or values copied from a live `.env`.

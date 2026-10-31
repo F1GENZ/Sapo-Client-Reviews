@@ -166,6 +166,7 @@ model WebhookEvent {
   receivedAt  DateTime           @default(now())
   nextRetryAt DateTime?
   processedAt DateTime?
+  lifecycleGeneration Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -175,6 +176,7 @@ model WebhookEvent {
   @@index([topic, resolvedDomain, payloadHash])
   @@index([resolvedStoreDomain, status, receivedAt])
   @@index([status, nextRetryAt])
+  @@index([status, updatedAt])
 }
 
 model CatalogProduct {
@@ -201,6 +203,7 @@ model CatalogProduct {
   @@index([shopId])
   @@index([shopId, deletedAt])
   @@index([updatedAt])
+  @@index([productId])
   @@map("catalog_products")
 }
 
@@ -219,6 +222,8 @@ model CustomerPurchase {
   refundedAt        BigInt?  @map("refunded_at")
   purchasedAt       BigInt   @map("purchased_at")
   rawPayload        Json?    @map("raw_payload")
+  hashVersion       Int      @default(1) @map("hash_version")
+  sourceUpdatedAt   BigInt?  @map("source_updated_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt BigInt   @map("updated_at")
@@ -227,6 +232,7 @@ model CustomerPurchase {
   @@index([shopId, productId])
   @@index([shopId, emailHash])
   @@index([shopId, phoneHash])
+  @@index([orderId])
   @@map("customer_purchases")
 }
 
@@ -297,3 +303,20 @@ model QnaQuestion {
   @@map("qna_questions")
 }
 
+
+model MetafieldSyncPending {
+  id          String @id @default(cuid())
+  storeDomain String @map("store_domain")
+  productId   String @map("product_id")
+
+  attempts      Int      @default(0)
+  lastError     String?  @map("last_error")
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([storeDomain, productId])
+  @@index([nextAttemptAt])
+  @@map("metafield_sync_pending")
+}

@@ -1,17 +1,36 @@
-import { consumePostAuthRedirect } from "./AuthStorage";
+import { exchangeHandoff } from "./ApiService";
+import {
+  consumePostAuthRedirect,
+  getActiveStoreDomain,
+  normalizeStoreDomain,
+  setAuthSession,
+} from "./AuthStorage";
+import { resetClientCache } from "./queryClient";
 
-const AUTH_CALLBACK_PARAMS = [
+const AUTH_PARAMS = [
   "handoff_code",
-  "session_token",
+  "hmac",
+  "store",
+  "timestamp",
   "code",
   "state",
   "scope",
-  "session_state",
-  "id_token",
-  "auth_callback",
+  "error",
+  "message",
 ];
 
-export function sanitizeInternalRedirect(targetUrl, orgid) {
+const SAPO_STORE_DOMAIN_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.mysapo\.net$/;
+
+export function parseStoreDomainInput(value) {
+  let text = String(value || "").trim().toLowerCase().replace(/^https?:\/\//, "");
+  text = text.split(/[/?#]/)[0];
+  if (!text) return null;
+  if (!text.includes(".")) text = `${text}.mysapo.net`;
+  if (!SAPO_STORE_DOMAIN_PATTERN.test(text)) return null;
+  return normalizeStoreDomain(text);
+}
+
+export function sanitizeInternalRedirect(targetUrl, storeDomain) {
   let next;
   try {
     next = new URL(targetUrl || "/", window.location.origin);
@@ -21,63 +40,43 @@ export function sanitizeInternalRedirect(targetUrl, orgid) {
   if (next.origin !== window.location.origin) {
     next = new URL("/", window.location.origin);
   }
-  if (orgid) next.searchParams.set("orgid", orgid);
-  AUTH_CALLBACK_PARAMS.forEach((key) => next.searchParams.delete(key));
+  if (next.pathname === "/dashboard") next.pathname = "/";
+  if (storeDomain) next.searchParams.set("storeDomain", storeDomain);
+  AUTH_PARAMS.forEach((key) => next.searchParams.delete(key));
   return next.pathname + next.search + next.hash;
 }
 
-export function getAuthenticatedRedirect(orgid) {
-  return sanitizeInternalRedirect(consumePostAuthRedirect(orgid) || "/", orgid);
+export function getAuthenticatedRedirect(storeDomain, serverRedirect) {
+  return sanitizeInternalRedirect(
+    consumePostAuthRedirect(storeDomain) || serverRedirect || "/",
+    storeDomain,
+  );
 }
 
-export function redirectIfChanged(targetUrl, { replace = false } = {}) {
-  if (!targetUrl) return;
-  const current = new URL(window.location.href);
-  const next = new URL(targetUrl, window.location.origin);
-
-  if (current.href === next.href) return;
-  if (replace) {
-    window.location.replace(next.href);
-    return;
+export async function activateStoreSession(storeDomain, sessionToken) {
+  const previous = getActiveStoreDomain();
+  if (previous && previous !== storeDomain) {
+    await resetClientCache();
   }
-  window.location.href = next.href;
+  setAuthSession(storeDomain, sessionToken);
 }
 
-export function isInternalLoginRedirect(targetUrl) {
+export async function completeHandoff(handoffCode) {
+  const result = await exchangeHandoff(handoffCode);
+  if (!result?.ok || !result?.storeDomain || !result?.sessionToken) {
+    throw new Error("Invalid session exchange response");
+  }
+  await activateStoreSession(result.storeDomain, result.sessionToken);
+  return { storeDomain: result.storeDomain, redirectTo: result.redirectTo };
+}
+
+export function navigateTopLevel(url) {
   try {
-    const next = new URL(targetUrl || "", window.location.origin);
-    return next.origin === window.location.origin && next.pathname === "/install/login";
+    if (window.top && window.top !== window.self) {
+      window.top.location.href = url;
+      return;
+    }
   } catch {
-    return false;
   }
-}
-
-export function extractAuthFromRedirect(redirectUrl, fallbackOrgid, fallbackToken) {
-  if (!redirectUrl) return null;
-
-  try {
-    const parsedUrl = new URL(redirectUrl, window.location.origin);
-    const orgidFromUrl = parsedUrl.searchParams.get("orgid");
-    const tokenFromUrl = parsedUrl.searchParams.get("session_token");
-    const resolvedOrgid =
-      orgidFromUrl && orgidFromUrl !== "null" && orgidFromUrl !== "undefined"
-        ? orgidFromUrl
-        : fallbackOrgid;
-    const resolvedToken = tokenFromUrl || fallbackToken;
-    return resolvedOrgid && resolvedToken
-      ? { orgid: resolvedOrgid, sessionToken: resolvedToken }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-export function stripCallbackParams({ markAuthCallback = false } = {}) {
-  const nextUrl = new URL(window.location.href);
-  AUTH_CALLBACK_PARAMS
-    .filter((key) => key !== "auth_callback")
-    .forEach((key) => nextUrl.searchParams.delete(key));
-  if (markAuthCallback) nextUrl.searchParams.set("auth_callback", "1");
-  else nextUrl.searchParams.delete("auth_callback");
-  window.history.replaceState({}, "", nextUrl.pathname + nextUrl.search + nextUrl.hash);
+  window.location.href = url;
 }

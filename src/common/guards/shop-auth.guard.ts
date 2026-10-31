@@ -9,7 +9,8 @@ import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { APP_ENV } from '../../config/app-config.module';
 import type { AppEnv } from '../../config/env.schema';
-import { isTrustedUnsafeOrigin } from '../security/origin-policy';
+import { isTrustedUnsafeOrigin, isUnsafeMethod } from '../security/origin-policy';
+import { STORE_DOMAIN_RE } from '../security/public-limits';
 import { ALLOW_EXPIRED_SAPO_TOKEN } from '../decorators/shop-auth.decorator';
 import { SapoService } from '../../sapo/sapo.service';
 import { SessionService } from '../../sapo/session.service';
@@ -20,8 +21,6 @@ type ShopRequest = Request & {
   token?: string;
   sapoTokenExpired?: boolean;
 };
-
-const STORE_DOMAIN_REGEX = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 
 const toStringValue = (value: unknown): string | null => {
   if (typeof value === 'string' && value.trim()) return value.trim();
@@ -65,18 +64,26 @@ export class ShopAuthGuard implements CanActivate {
     }
 
     const requestedStoreDomain = this.getRequestedStoreDomain(req);
-    if (requestedStoreDomain && !STORE_DOMAIN_REGEX.test(requestedStoreDomain)) {
+    if (requestedStoreDomain && !STORE_DOMAIN_RE.test(requestedStoreDomain)) {
       throw new BadRequestException('Invalid storeDomain');
     }
 
-    const sessionToken =
-      this.sessionService.getSessionTokenFromRequest(req) || this.extractBearerToken(req.headers.authorization);
+    const bearerToken = this.extractBearerToken(req.headers.authorization);
+    if (isUnsafeMethod(req.method) && !bearerToken) {
+      throw new UnauthorizedException('Missing auth session: bearer token required for state-changing requests');
+    }
+    const sessionToken = bearerToken || this.sessionService.getSessionTokenFromRequest(req);
     if (!sessionToken) throw new UnauthorizedException('Missing auth session');
 
     const session = this.sessionService.verifySessionToken(sessionToken);
-    if (!STORE_DOMAIN_REGEX.test(session.storeDomain)) throw new BadRequestException('Invalid storeDomain');
+    if (!STORE_DOMAIN_RE.test(session.storeDomain)) throw new BadRequestException('Invalid storeDomain');
     if (requestedStoreDomain && requestedStoreDomain !== session.storeDomain) {
       throw new UnauthorizedException('StoreDomain does not match auth session');
+    }
+
+    const lifecycleGeneration = await this.sapoService.getLifecycleGeneration(session.storeDomain);
+    if (lifecycleGeneration !== session.gen) {
+      throw new UnauthorizedException('Auth session predates the current installation');
     }
 
     try {

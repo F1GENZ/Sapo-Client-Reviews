@@ -113,7 +113,14 @@ f1genz-rating-badge *::after {
   display: flex;
   min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
   border-bottom: 2px solid var(--f1genz-sapo-review-border);
+}
+
+.f1genz-sapo-review-section-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .f1genz-sapo-review-section-tab {
@@ -209,6 +216,9 @@ f1genz-rating-badge *::after {
 
 .f1genz-sapo-review-summary__bars {
   flex: 1;
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -216,15 +226,20 @@ f1genz-rating-badge *::after {
 }
 
 .f1genz-sapo-review-bar-row {
+  -webkit-appearance: none;
+  appearance: none;
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-width: 0;
+  align-self: stretch;
   padding: 2px 0;
   border: none;
   background: transparent;
   color: inherit;
   font: inherit;
+  cursor: pointer;
 }
 
 .f1genz-sapo-review-feedback-stack :where(button, a, input, select, textarea, [tabindex]):focus-visible {
@@ -241,10 +256,13 @@ f1genz-rating-badge *::after {
   color: var(--f1genz-sapo-review-text-muted);
   font-size: 0.75em;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .f1genz-sapo-review-bar-row__track {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 40px;
+  width: 100%;
   height: 8px;
   overflow: hidden;
   border-radius: var(--f1genz-sapo-review-radius-xs);
@@ -256,6 +274,7 @@ f1genz-rating-badge *::after {
   height: 100%;
   border-radius: var(--f1genz-sapo-review-radius-xs);
   background: var(--f1genz-sapo-review-star-color);
+  min-width: 0;
 }
 
 .f1genz-sapo-review-bar-row__count {
@@ -264,6 +283,7 @@ f1genz-rating-badge *::after {
   font-size: 0.75em;
   font-weight: 500;
   text-align: left;
+  flex-shrink: 0;
 }
 
 .f1genz-sapo-review-btn,
@@ -599,27 +619,6 @@ f1genz-rating-badge *::after {
   font-size: 0.625em;
 }
 
-.f1genz-sapo-review-card__contact {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 4px;
-  color: var(--f1genz-sapo-review-text-muted);
-  font-size: 0.6875em;
-}
-
-.f1genz-sapo-review-card__contact-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.f1genz-sapo-review-card__contact-icon {
-  flex: 0 0 auto;
-  color: var(--f1genz-sapo-review-text-muted);
-  opacity: 0.85;
-}
-
 .f1genz-sapo-review-card__stars {
   display: flex;
   gap: 1px;
@@ -737,6 +736,18 @@ f1genz-rating-badge *::after {
   line-height: 1.5;
 }
 
+.f1genz-sapo-link {
+  color: var(--f1genz-sapo-review-reply-border, #1677ff);
+  text-decoration: underline;
+  word-break: break-word;
+  transition: opacity 0.15s ease;
+}
+
+.f1genz-sapo-link:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
 .f1genz-sapo-review-qna-card {
   padding: 1em 0;
   border-bottom: 1px solid var(--f1genz-sapo-review-border);
@@ -795,10 +806,6 @@ f1genz-rating-badge *::after {
 
 .f1genz-sapo-review-grid .f1genz-sapo-review-card__top {
   margin-bottom: 0.25em;
-}
-
-.f1genz-sapo-review-grid .f1genz-sapo-review-card__contact {
-  gap: 8px;
 }
 
 .f1genz-sapo-review-grid .f1genz-sapo-review-card__content,
@@ -1036,10 +1043,37 @@ f1genz-rating-badge *::after {
 }
 
 .f1genz-sapo-review-file-wrap {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.f1genz-sapo-review-file-wrap input[type="file"],
+.f1genz-sapo-review-file-wrap input.f1genz-sapo-review-file-input,
+#f1genz-sapo-review-input-media {
+  display: none !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  position: absolute !important;
+  width: 0 !important;
+  height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+label.f1genz-sapo-review-file-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin: 0;
+  user-select: none;
 }
 
 .f1genz-sapo-review-file-note {
@@ -1218,8 +1252,38 @@ f1genz-rating-badge *::after {
   }
 
   .f1genz-sapo-review-summary {
-    flex-direction: column;
-    gap: 1em;
+    flex-direction: row;
+    align-items: center;
+    gap: 1.25em;
+    padding: 1em;
+  }
+
+  .f1genz-sapo-review-summary__score {
+    min-width: 85px;
+    flex-shrink: 0;
+  }
+
+  .f1genz-sapo-review-summary__avg {
+    font-size: 2.4em;
+  }
+
+  .f1genz-sapo-review-summary__bars {
+    flex: 1 1 0%;
+    width: auto;
+    min-width: 0;
+    padding-top: 0;
+    gap: 4px;
+  }
+
+  .f1genz-sapo-review-bar-row {
+    padding: 1px 0;
+    gap: 6px;
+  }
+
+  .f1genz-sapo-review-bar-row__track {
+    height: 6px;
+    flex: 1 1 0%;
+    min-width: 30px;
   }
 
   .f1genz-sapo-review-grid,
@@ -1253,6 +1317,47 @@ f1genz-rating-badge *::after {
   }
 }
 
+@media (max-width: 767px) {
+
+  .f1genz-sapo-review-summary__bars {
+    align-self: stretch;
+  }
+
+  .f1genz-sapo-review-bar-row {
+    width: 100%;
+    align-self: stretch;
+  }
+
+  .f1genz-sapo-review-bar-row__track {
+    flex: 1 1 0%;
+    width: 100%;
+    min-width: 30px;
+  }
+}
+
+@media (max-width: 360px) {
+  .f1genz-sapo-review-summary {
+    gap: 0.75em;
+    padding: 0.75em;
+  }
+
+  .f1genz-sapo-review-summary__score {
+    min-width: 75px;
+  }
+
+  .f1genz-sapo-review-summary__avg {
+    font-size: 2em;
+  }
+
+  .f1genz-sapo-review-bar-row__label {
+    min-width: 24px;
+  }
+
+  .f1genz-sapo-review-bar-row__count {
+    width: 18px;
+  }
+}
+
 @media (min-width: 601px) and (max-width: 900px) {
   .f1genz-sapo-review-masonry {
     --f1genz-sapo-review-masonry-columns: 2;
@@ -1262,16 +1367,5 @@ f1genz-rating-badge *::after {
 @media (min-width: 901px) and (max-width: 1200px) {
   .f1genz-sapo-review-masonry {
     --f1genz-sapo-review-masonry-columns: 3;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .f1genz-sapo-review-feedback-stack *,
-  .f1genz-sapo-review-modal-overlay *,
-  .f1genz-sapo-review-lightbox * {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
   }
 }

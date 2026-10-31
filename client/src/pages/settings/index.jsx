@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AdminLayout from "../../components/layout/AdminLayout";
 import {
@@ -11,7 +11,7 @@ import {
   saveSpamConfig,
   saveWidgetConfig,
 } from "../../common/ApiService";
-import { getOrgid } from "../../common/AuthStorage";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { getErrorMessage } from "../../common/getErrorMessage";
 import { shopQueryKeys } from "../../common/queryKeys";
 import { toast } from "../../common/toast";
@@ -20,7 +20,7 @@ import {
   QuestionCircleOutlined, UnorderedListOutlined,
   AppstoreOutlined, SafetyOutlined, HomeOutlined,
 } from "@ant-design/icons";
-import Link from "../../components/OrgLink";
+import Link from "../../components/StoreLink";
 
 const { Title, Text } = Typography;
 
@@ -46,8 +46,6 @@ const defaultConfig = {
   showDate: true,
   showFilter: true,
   showSort: true,
-  emailDisplay: "mask",
-  phoneDisplay: "mask",
   formEmailMode: "optional",
   formPhoneMode: "optional",
   formTitleMode: "optional",
@@ -71,7 +69,7 @@ const defaultConfig = {
 };
 
 const WIDGET_TAB_FIELDS = {
-  display: ["titleText", "showTitle", "showDate", "showFilter", "showSort", "emailDisplay", "phoneDisplay", "reviewQnaDisplayMode", "reviewLayout", "reviewItemsPerPage", "allowReply", "replyBadgeText"],
+  display: ["titleText", "showTitle", "showDate", "showFilter", "showSort", "reviewQnaDisplayMode", "reviewLayout", "reviewItemsPerPage", "allowReply", "replyBadgeText"],
   form: ["formContentMode", "formTitleMode", "formEmailMode", "formPhoneMode", "allowImage", "allowVideo", "requireLogin", "requirePurchaseToReview"],
   trust: ["showVerified", "showVerifiedAll", "verifiedColor"],
   qna: ["allowQnA", "qnaDisplayMode", "qnaItemsPerPage"],
@@ -113,20 +111,20 @@ const BASE_REVIEWS = [
   {
     id: "1", rating: 5, title: "Xuất sắc, rất đáng mua!",
     content: "Sản phẩm rất tốt, đúng như mô tả. Giao hàng nhanh, đóng gói cẩn thận. Sẽ ủng hộ shop dài dài!",
-    author: "Nguyễn Văn An", email: "nguyenvanan@gmail.com", phone: "0912345678",
+    author: "Nguyễn Văn An",
     created_at: Date.now() - 86400000 * 2, verified: true,
     images: ["https://placehold.co/80x80/f59e0b/fff?text=1", "https://placehold.co/80x80/10b981/fff?text=2"],
   },
   {
     id: "2", rating: 4, title: "Hài lòng",
     content: "Chất lượng ổn so với giá tiền. Mình đã mua cho cả gia đình, ai cũng hài lòng.",
-    author: "Trần Thị Bích", email: "bich.tran@yahoo.com", phone: "0987654321",
+    author: "Trần Thị Bích",
     created_at: Date.now() - 86400000 * 5, verified: false,
   },
   {
     id: "3", rating: 5, title: "Sẽ mua lại!",
     content: "Mua lần 2 rồi, lần nào cũng ok. Shop tư vấn nhiệt tình lắm ạ. Sẽ giới thiệu bạn bè đến mua.",
-    author: "Lê Minh Châu", email: "minhchau2001@hotmail.com", phone: "0369852147",
+    author: "Lê Minh Châu",
     created_at: Date.now() - 86400000 * 8, verified: false,
     video: "https://placehold.co/160x80/6366f1/fff?text=Video",
     reply: { content: "Cảm ơn bạn đã ủng hộ shop ạ! Chúc bạn sử dụng vui vẻ nhé" },
@@ -229,20 +227,6 @@ const timeAgo = (ts) => {
   if (d < 1) return "Hôm nay";
   if (d < 30) return `${d} ngày trước`;
   return `${Math.floor(d / 30)} tháng trước`;
-};
-const maskEmail = (email) => {
-  if (!email) return "";
-  const at = email.indexOf("@");
-  if (at < 0) return "***";
-  const local = email.slice(0, at);
-  const domain = email.slice(at + 1);
-  const show = Math.max(2, Math.ceil(local.length / 3));
-  return `${local.slice(0, show)}***@${domain}`;
-};
-const maskPhone = (phone) => {
-  if (!phone) return "";
-  if (phone.length <= 5) return "***";
-  return `${phone.slice(0, 3)}***${phone.slice(-2)}`;
 };
 const isVisibleMode = (mode) => mode !== "hidden";
 const requiredMark = (mode) => (mode === "required" ? " *" : "");
@@ -440,22 +424,6 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
           <div className="f1g-card__stars">{renderStars(r.rating, 14)}</div>
         </div>
       </div>
-      {(config.emailDisplay !== "hidden" && r.email) || (config.phoneDisplay !== "hidden" && r.phone) ? (
-        <div className="f1g-card__contact">
-          {config.emailDisplay !== "hidden" && r.email && (
-            <span className="f1g-card__contact-item">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ verticalAlign: -1, marginRight: 3 }}><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-              {config.emailDisplay === "mask" ? maskEmail(r.email) : r.email}
-            </span>
-          )}
-          {config.phoneDisplay !== "hidden" && r.phone && (
-            <span className="f1g-card__contact-item">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ verticalAlign: -1, marginRight: 3 }}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
-              {config.phoneDisplay === "mask" ? maskPhone(r.phone) : r.phone}
-            </span>
-          )}
-        </div>
-      ) : null}
       {config.showTitle && r.title && (
         <div className="f1g-card__title">{r.title}</div>
       )}
@@ -1128,7 +1096,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
    SETTINGS PAGE
    ══════════════════════════════════════════════════ */
 const SettingsPage = () => {
-  const orgid = getOrgid();
+  const storeDomain = getStoreDomain();
   const [localConfig, setLocalConfig] = useState(null); // null = not yet initialized
   const u = (key, value) => setLocalConfig((prev) => ({ ...(prev ?? defaultConfig), [key]: value }));
   const [activeTabKey, setActiveTabKey] = useState("display");
@@ -1136,9 +1104,9 @@ const SettingsPage = () => {
   /* ── Widget config: load from server ── */
   const queryClient = useQueryClient();
   const { data: savedWidgetConfig, isLoading: widgetLoading } = useQuery({
-    queryKey: shopQueryKeys.widgetConfig(orgid),
+    queryKey: shopQueryKeys.widgetConfig(storeDomain),
     queryFn: fetchWidgetConfig,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
 
   // Initialize local config once from server; after that local edits take over
@@ -1176,7 +1144,7 @@ const SettingsPage = () => {
   const widgetMutation = useMutation({
     mutationFn: (data) => saveWidgetConfig(data),
     onSuccess: (data) => {
-      queryClient.setQueryData(shopQueryKeys.widgetConfig(orgid), data);
+      queryClient.setQueryData(shopQueryKeys.widgetConfig(storeDomain), data);
       setLocalConfig({ ...defaultConfig, ...(data || {}) });
       toast.success("Đã lưu cấu hình");
     },
@@ -1191,9 +1159,9 @@ const SettingsPage = () => {
 
   /* ── Spam config ── */
   const { data: spamConfig, isLoading: spamLoading } = useQuery({
-    queryKey: shopQueryKeys.spamConfig(orgid),
+    queryKey: shopQueryKeys.spamConfig(storeDomain),
     queryFn: fetchSpamConfig,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
   });
   const [spamDraft, setSpamDraft] = useState(null);
   const spam = spamDraft ?? spamConfig ?? {};
@@ -1215,7 +1183,7 @@ const SettingsPage = () => {
   const spamMutation = useMutation({
     mutationFn: (data) => saveSpamConfig(data),
     onSuccess: (data) => {
-      queryClient.setQueryData(shopQueryKeys.spamConfig(orgid), data);
+      queryClient.setQueryData(shopQueryKeys.spamConfig(storeDomain), data);
       setSpamDraft(null);
       toast.success("Đã lưu cấu hình spam");
     },
@@ -1408,39 +1376,6 @@ const SettingsPage = () => {
                 style={{ width: "100%" }}
                 value={formConfig.reviewItemsPerPage}
                 onChange={(v) => u("reviewItemsPerPage", v ?? 5)}
-              />
-            </div>
-            <Divider style={{ margin: "2px 0" }} />
-            <Flex vertical gap={2}>
-              <Text strong style={{ fontSize: 13 }}>Quyền riêng tư thông tin khách</Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>Áp dụng cho phần hiển thị công khai của review.</Text>
-            </Flex>
-            <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Email người đánh giá</Text>
-              <Select
-                value={formConfig.emailDisplay}
-                onChange={(v) => u("emailDisplay", v)}
-                size="small"
-                style={{ width: "100%" }}
-                options={[
-                  { label: "Ẩn hoàn toàn", value: "hidden" },
-                  { label: "Che một phần (n***@domain.com)", value: "mask" },
-                  { label: "Hiển thị đầy đủ", value: "full" },
-                ]}
-              />
-            </div>
-            <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Số điện thoại người đánh giá</Text>
-              <Select
-                value={formConfig.phoneDisplay}
-                onChange={(v) => u("phoneDisplay", v)}
-                size="small"
-                style={{ width: "100%" }}
-                options={[
-                  { label: "Ẩn hoàn toàn", value: "hidden" },
-                  { label: "Che một phần (091***78)", value: "mask" },
-                  { label: "Hiển thị đầy đủ", value: "full" },
-                ]}
               />
             </div>
             <Divider style={{ margin: "2px 0" }} />
@@ -1689,44 +1624,15 @@ const SettingsPage = () => {
               <>
                 <Flex vertical gap={10}>
                   <Text strong style={{ fontSize: 13 }}>Luật chống spam</Text>
-                  <Flex align="center" gap={10}>
-                    <SettingsSwitch label="Bật nhận diện spam tự động" checked={spam.enabled ?? true} onChange={(v) => us("enabled", v)} />
-                    <Text style={{ fontSize: 13 }}>Bật nhận diện spam tự động</Text>
-                  </Flex>
-                  <Flex vertical gap={2}>
-                    <Flex align="center" gap={10}>
-                      <SettingsSwitch label="Duyệt tự động nội dung hợp lệ" checked={spam.autoApprove ?? true} onChange={(v) => us("autoApprove", v)} />
-                      <Text style={{ fontSize: 13 }}>Duyệt tự động nội dung hợp lệ</Text>
-                    </Flex>
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      Áp dụng cho các luồng không có cấu hình duyệt riêng từ form storefront.
-                    </Text>
-                  </Flex>
-                  <Flex align="center" gap={10}>
-                    <SettingsSwitch label="Chặn nội dung trùng lặp" checked={spam.blockDuplicate ?? true} onChange={(v) => us("blockDuplicate", v)} />
-                    <Text style={{ fontSize: 13 }}>Chặn nội dung trùng lặp</Text>
-                  </Flex>
-                  <Flex align="center" gap={10}>
-                    <SettingsSwitch label="Chặn ký tự lặp liên tục" checked={spam.blockRepeatedChars ?? true} onChange={(v) => us("blockRepeatedChars", v)} />
-                    <Text style={{ fontSize: 13 }}>Chặn ký tự lặp liên tục</Text>
-                  </Flex>
-                </Flex>
-                <Divider style={{ margin: "4px 0" }} />
-                <Flex vertical gap={10}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    Review chứa từ khoá bị chặn, vượt độ dài tối đa hoặc trùng nội dung cũ của cùng tác giả sẽ vào mục Spam.
+                  </Text>
                   <div>
-                    <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Độ dài nội dung tối thiểu</Text>
+                    <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Độ dài nội dung tối đa</Text>
                     <Space.Compact style={{ width: "100%" }}>
-                      <InputNumber value={spam.minContentLength ?? 10} onChange={(v) => us("minContentLength", v)} min={0} max={500} size="small" style={{ width: "100%" }} />
+                      <InputNumber value={spam.maxContentLength ?? 5000} onChange={(v) => us("maxContentLength", v ?? 5000)} min={1} max={5000} precision={0} size="small" style={{ width: "100%" }} />
                       <Button size="small" disabled style={{ width: 58 }}>ký tự</Button>
                     </Space.Compact>
-                  </div>
-                  <div>
-                    <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Số URL tối đa cho phép</Text>
-                    <InputNumber value={spam.maxUrls ?? 2} onChange={(v) => us("maxUrls", v)} min={1} max={20} size="small" style={{ width: "100%" }} />
-                  </div>
-                  <div>
-                    <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Số đánh giá tối đa / tác giả</Text>
-                    <InputNumber value={spam.maxReviewsPerAuthor ?? 3} onChange={(v) => us("maxReviewsPerAuthor", v)} min={1} max={50} size="small" style={{ width: "100%" }} />
                   </div>
                 </Flex>
                 <Divider style={{ margin: "4px 0" }} />

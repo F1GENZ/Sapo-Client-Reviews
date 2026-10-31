@@ -4,7 +4,7 @@ import { Button, DatePicker, Flex, Form, Input, Progress, Row, Col, Select, Swit
 import { DeleteOutlined, LinkOutlined, LoadingOutlined, PlusOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { fetchWidgetConfig } from "../../common/ApiService";
-import { getOrgid } from "../../common/AuthStorage";
+import { getStoreDomain } from "../../common/AuthStorage";
 import { getErrorMessage } from "../../common/getErrorMessage";
 import { shopQueryKeys } from "../../common/queryKeys";
 import { toast } from "../../common/toast";
@@ -80,7 +80,7 @@ const ReviewForm = ({ products = [], initialProductId = null, onSuccess }) => {
   const [mediaItems, setMediaItems] = useState([]);
   const [videoUrl, setVideoUrl] = useState("");
   const fileRef = useRef(null);
-  const orgid = getOrgid();
+  const storeDomain = getStoreDomain();
   const { upload, uploading, progress } = useMediaUpload();
   const createMutation = useCreateReview();
   const isFormBusy = uploading || createMutation.isPending;
@@ -88,9 +88,9 @@ const ReviewForm = ({ products = [], initialProductId = null, onSuccess }) => {
   const ratingValue = Form.useWatch("rating", form) || 0;
 
   const { data: widgetConfigData } = useQuery({
-    queryKey: shopQueryKeys.widgetConfig(orgid),
+    queryKey: shopQueryKeys.widgetConfig(storeDomain),
     queryFn: fetchWidgetConfig,
-    enabled: !!orgid,
+    enabled: !!storeDomain,
     staleTime: 5 * 60 * 1000,
   });
 

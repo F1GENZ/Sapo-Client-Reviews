@@ -35,11 +35,6 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
-        '/admin': {
-          target: env.VITE_SAPO_API_URL || 'http://localhost:3000',
-          changeOrigin: true,
-          secure: false,
-        },
       },
     },
     build: {

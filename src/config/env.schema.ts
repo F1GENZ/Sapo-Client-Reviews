@@ -1,3 +1,6 @@
+import { parseTrustProxy } from '../common/trust-proxy';
+import { assertEncryptionKey, assertUsableSecret, isPlaceholderSecret } from './secret-guard';
+
 export type AppEnv = {
   NODE_ENV: 'development' | 'test' | 'production';
   PORT: number;
@@ -14,10 +17,7 @@ export type AppEnv = {
   SAPO_INSTALL_CALLBACK_URL: string;
   SAPO_LOGIN_CALLBACK_URL: string;
 
-  SAPO_WEBHOOK_SECRET: string;
-
   SAPO_API_MAX_CONCURRENT: number;
-  SAPO_API_MIN_INTERVAL_MS: number;
 
   R2_WORKER_URL: string;
   R2_UPLOAD_SECRET: string;
@@ -42,8 +42,6 @@ export type AppEnv = {
 
   AUTH_RATE_LIMIT_WINDOW_SECONDS: number;
   AUTH_RATE_LIMIT_MAX: number;
-  WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: number;
-  WEBHOOK_RATE_LIMIT_MAX: number;
   SESSION_EXCHANGE_RATE_LIMIT_MAX: number;
 
   PUBLIC_WRITE_RATE_LIMIT_WINDOW_SECONDS: number;
@@ -69,13 +67,9 @@ const URL_KEYS = [
 
 const PLACEHOLDER_CHECK_KEYS = [
   'SAPO_CLIENT_ID',
-  'SAPO_CLIENT_SECRET',
-  'SAPO_WEBHOOK_SECRET',
-  'APP_SESSION_SECRET',
   'REDIS_PASSWORD',
   'DATABASE_URL',
   'DIRECT_URL',
-  'DATA_ENCRYPTION_KEY',
   'READINESS_TOKEN',
 ] as const;
 
@@ -129,17 +123,10 @@ const parseInteger = (
   return parsed;
 };
 
-const parseTrustProxy = (raw: string, errors: string[]): boolean | number | string => {
-  const normalized = raw.trim().toLowerCase();
-  if (!normalized || normalized === 'false') return false;
-  if (normalized === 'true') {
-    errors.push('TRUST_PROXY must not be true; use false, a bounded hop count, or a safe named proxy value');
-    return false;
-  }
-  const parsed = Number(raw);
-  if (Number.isInteger(parsed) && parsed >= 0) return parsed;
-  if (/^[a-z0-9_.:-]+$/i.test(raw)) return raw;
-  errors.push('TRUST_PROXY must be false, a non-negative integer, or a safe named proxy value');
+const parseTrustProxyValue = (raw: string, errors: string[]): boolean | number | string => {
+  const result = parseTrustProxy(raw);
+  if (result.ok) return result.value;
+  errors.push(result.error);
   return false;
 };
 
@@ -163,18 +150,6 @@ const assertUrl = (
   if (!value) return;
   if (!isHttpUrl(value, requireHttps)) {
     errors.push(`${key} must be an absolute ${requireHttps ? 'HTTPS' : 'HTTP(S)'} URL`);
-  }
-};
-
-const isPlaceholder = (value: string): boolean =>
-  /(replace-with|change-me|changeme|placeholder|your-|todo)/i.test(value);
-
-const decodedKeyLength = (value: string): number => {
-  if (/^[a-f0-9]{64}$/i.test(value)) return Buffer.from(value, 'hex').length;
-  try {
-    return Buffer.from(value, 'base64').length;
-  } catch {
-    return 0;
   }
 };
 
@@ -211,17 +186,15 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
     FRONTEND_URL: trim(env.FRONTEND_URL) || 'http://localhost:5173',
     API_BASE_URL: trim(env.API_BASE_URL) || 'http://localhost:3000',
     CORS_ALLOWED_ORIGINS: splitCsv(trim(env.CORS_ALLOWED_ORIGINS)),
-    TRUST_PROXY: parseTrustProxy(trim(env.TRUST_PROXY) || 'false', errors),
+    TRUST_PROXY: parseTrustProxyValue(trim(env.TRUST_PROXY) || 'false', errors),
     REQUEST_BODY_LIMIT: trim(env.REQUEST_BODY_LIMIT) || '1mb',
     WEBHOOK_BODY_LIMIT: trim(env.WEBHOOK_BODY_LIMIT) || '256kb',
 
     SAPO_CLIENT_ID: trim(env.SAPO_CLIENT_ID),
     SAPO_CLIENT_SECRET: trim(env.SAPO_CLIENT_SECRET),
-    SAPO_SCOPE: trim(env.SAPO_SCOPE) || 'read_products write_products read_orders write_orders read_customers write_customers read_script_tags write_script_tags read_themes write_themes',
+    SAPO_SCOPE: trim(env.SAPO_SCOPE).split(/[\s,]+/).filter(Boolean).join(',') || 'read_products,write_products,read_orders',
     SAPO_INSTALL_CALLBACK_URL: trim(env.SAPO_INSTALL_CALLBACK_URL),
     SAPO_LOGIN_CALLBACK_URL: trim(env.SAPO_LOGIN_CALLBACK_URL),
-
-    SAPO_WEBHOOK_SECRET: trim(env.SAPO_WEBHOOK_SECRET),
 
     SAPO_API_MAX_CONCURRENT: parseInteger(
       trim(env.SAPO_API_MAX_CONCURRENT),
@@ -229,13 +202,6 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
       errors,
       4,
       { min: 1 },
-    ),
-    SAPO_API_MIN_INTERVAL_MS: parseInteger(
-      trim(env.SAPO_API_MIN_INTERVAL_MS),
-      'SAPO_API_MIN_INTERVAL_MS',
-      errors,
-      250,
-      { min: 0 },
     ),
 
     R2_WORKER_URL: trim(env.R2_WORKER_URL) || '',
@@ -284,20 +250,6 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
     AUTH_RATE_LIMIT_MAX: parseInteger(trim(env.AUTH_RATE_LIMIT_MAX), 'AUTH_RATE_LIMIT_MAX', errors, 60, {
       min: 1,
     }),
-    WEBHOOK_RATE_LIMIT_WINDOW_SECONDS: parseInteger(
-      trim(env.WEBHOOK_RATE_LIMIT_WINDOW_SECONDS),
-      'WEBHOOK_RATE_LIMIT_WINDOW_SECONDS',
-      errors,
-      60,
-      { min: 1 },
-    ),
-    WEBHOOK_RATE_LIMIT_MAX: parseInteger(
-      trim(env.WEBHOOK_RATE_LIMIT_MAX),
-      'WEBHOOK_RATE_LIMIT_MAX',
-      errors,
-      300,
-      { min: 1 },
-    ),
     SESSION_EXCHANGE_RATE_LIMIT_MAX: parseInteger(
       trim(env.SESSION_EXCHANGE_RATE_LIMIT_MAX),
       'SESSION_EXCHANGE_RATE_LIMIT_MAX',
@@ -350,17 +302,42 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
     errors.push('REDIS_KEY_PREFIX must be lowercase kebab-case without spaces');
   }
 
-  // Secrets must be distinct — fail startup if any two are identical
   const secrets = [
     { key: 'APP_SESSION_SECRET', value: appEnv.APP_SESSION_SECRET },
     { key: 'SAPO_CLIENT_SECRET', value: appEnv.SAPO_CLIENT_SECRET },
-    { key: 'SAPO_WEBHOOK_SECRET', value: appEnv.SAPO_WEBHOOK_SECRET },
   ];
   for (let i = 0; i < secrets.length; i++) {
     for (let j = i + 1; j < secrets.length; j++) {
       if (secrets[i].value && secrets[j].value && secrets[i].value === secrets[j].value) {
         errors.push(`${secrets[i].key} and ${secrets[j].key} must be distinct`);
       }
+    }
+  }
+
+  const checkSetSecret = (check: () => unknown): void => {
+    try {
+      check();
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+  };
+  if (appEnv.SAPO_CLIENT_SECRET) {
+    checkSetSecret(() => assertUsableSecret('SAPO_CLIENT_SECRET', appEnv.SAPO_CLIENT_SECRET));
+  }
+  if (appEnv.APP_SESSION_SECRET) {
+    checkSetSecret(() => assertUsableSecret('APP_SESSION_SECRET', appEnv.APP_SESSION_SECRET, { minBytes: 32 }));
+  }
+  if (appEnv.DATA_ENCRYPTION_KEY) {
+    checkSetSecret(() => assertEncryptionKey(appEnv.DATA_ENCRYPTION_KEY));
+  }
+
+  const r2Keys = ['R2_WORKER_URL', 'R2_PUBLIC_DOMAIN', 'R2_UPLOAD_SECRET'] as const;
+  if (r2Keys.some((key) => appEnv[key])) {
+    for (const key of r2Keys) {
+      if (!appEnv[key]) errors.push(`${key} is required when any of ${r2Keys.join(', ')} is set`);
+    }
+    if (appEnv.R2_UPLOAD_SECRET) {
+      checkSetSecret(() => assertUsableSecret('R2_UPLOAD_SECRET', appEnv.R2_UPLOAD_SECRET, { minBytes: 32 }));
     }
   }
 
@@ -378,7 +355,6 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
         'SAPO_SCOPE',
         'SAPO_INSTALL_CALLBACK_URL',
         'SAPO_LOGIN_CALLBACK_URL',
-        'SAPO_WEBHOOK_SECRET',
         'APP_SESSION_SECRET',
         'DATABASE_URL',
         'DIRECT_URL',
@@ -388,8 +364,6 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
         'READINESS_TOKEN',
         'AUTH_RATE_LIMIT_WINDOW_SECONDS',
         'AUTH_RATE_LIMIT_MAX',
-        'WEBHOOK_RATE_LIMIT_WINDOW_SECONDS',
-        'WEBHOOK_RATE_LIMIT_MAX',
         'SESSION_EXCHANGE_RATE_LIMIT_MAX',
         'PUBLIC_WRITE_RATE_LIMIT_WINDOW_SECONDS',
         'PUBLIC_WRITE_RATE_LIMIT_MAX',
@@ -409,29 +383,19 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
         'REDIS_PORT',
         'REDIS_KEY_PREFIX',
         'SAPO_API_MAX_CONCURRENT',
-        'SAPO_API_MIN_INTERVAL_MS',
         'AUTH_RATE_LIMIT_WINDOW_SECONDS',
         'AUTH_RATE_LIMIT_MAX',
-        'WEBHOOK_RATE_LIMIT_WINDOW_SECONDS',
-        'WEBHOOK_RATE_LIMIT_MAX',
         'SESSION_EXCHANGE_RATE_LIMIT_MAX',
         'PUBLIC_WRITE_RATE_LIMIT_WINDOW_SECONDS',
         'PUBLIC_WRITE_RATE_LIMIT_MAX',
+        'TRUST_PROXY',
       ],
       errors,
     );
 
     for (const key of PLACEHOLDER_CHECK_KEYS) {
       const value = appEnv[key];
-      if (value && isPlaceholder(value)) errors.push(`${key} must not be a placeholder in production`);
-    }
-
-    if (appEnv.APP_SESSION_SECRET && Buffer.byteLength(appEnv.APP_SESSION_SECRET, 'utf8') < 32) {
-      errors.push('APP_SESSION_SECRET must be at least 32 bytes in production');
-    }
-
-    if (appEnv.DATA_ENCRYPTION_KEY && decodedKeyLength(appEnv.DATA_ENCRYPTION_KEY) !== 32) {
-      errors.push('DATA_ENCRYPTION_KEY must decode to exactly 32 bytes from base64 or hex');
+      if (value && isPlaceholderSecret(value)) errors.push(`${key} must not be a placeholder in production`);
     }
   }
 

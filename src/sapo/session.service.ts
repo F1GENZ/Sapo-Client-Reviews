@@ -4,11 +4,13 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { serialize } from 'cookie';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
+import { assertUsableSecret } from '../config/secret-guard';
 import { RedisService } from '../redis/redis.service';
 import { isSafeRedirect } from './oauth-state.service';
 
 export type AppSessionPayload = {
   storeDomain: string;
+  gen: number;
   type: 'sapo_app_session';
   iat: number;
   exp: number;
@@ -57,10 +59,14 @@ const isSameSiteDeployment = (frontendUrl: string, apiBaseUrl: string): boolean 
 
 @Injectable()
 export class SessionService {
+  private readonly sessionSecret: string;
+
   constructor(
     @Inject(APP_ENV) private readonly env: AppEnv,
     private readonly redis: RedisService,
-  ) {}
+  ) {
+    this.sessionSecret = assertUsableSecret('APP_SESSION_SECRET', env.APP_SESSION_SECRET, { minBytes: 32 });
+  }
 
   private handoffKey(code: string): string {
     return `session-handoff:${hash(code)}`;
@@ -75,15 +81,16 @@ export class SessionService {
   }
 
   private sign(input: string): string {
-    return createHmac('sha256', this.env.APP_SESSION_SECRET).update(input).digest('base64url');
+    return createHmac('sha256', this.sessionSecret).update(input).digest('base64url');
   }
 
-  createSessionToken(storeDomain: string): string {
+  createSessionToken(storeDomain: string, lifecycleGeneration: number): string {
     const now = Math.floor(Date.now() / 1000);
     const header = base64UrlJson({ alg: 'HS256', typ: 'JWT' });
     const body = base64UrlJson({
       storeDomain,
       type: 'sapo_app_session',
+      gen: lifecycleGeneration,
       iat: now,
       exp: now + this.env.APP_SESSION_TTL_SECONDS,
     } satisfies AppSessionPayload);
@@ -108,6 +115,7 @@ export class SessionService {
     if (payload.type !== 'sapo_app_session' || !payload.storeDomain || payload.exp <= now) {
       throw new UnauthorizedException('Expired auth session');
     }
+    if (!Number.isInteger(payload.gen)) throw new UnauthorizedException('Invalid auth session');
     return payload;
   }
 
@@ -159,10 +167,10 @@ export class SessionService {
     };
   }
 
-  setSessionCookie(res: Response, storeDomain: string): void {
+  setSessionCookie(res: Response, sessionToken: string): void {
     res.setHeader('Set-Cookie', serialize(
       this.env.SESSION_COOKIE_NAME,
-      this.createSessionToken(storeDomain),
+      sessionToken,
       this.cookieOptions(this.env.APP_SESSION_TTL_SECONDS),
     ));
   }

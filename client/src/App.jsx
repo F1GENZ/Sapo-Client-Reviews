@@ -1,22 +1,16 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useRef, Component, lazy, Suspense } from "react";
+import { useEffect, useState, Component, lazy, Suspense } from "react";
 import { reportClientError } from "./common/ErrorReporter";
-import { exchangeHandoff } from "./common/ApiService";
 import {
-  clearAuthSession,
-  getOrgid,
+  getActiveStoreDomain,
+  getStoreDomain,
   isAuthVerified,
-  migrateAuthStorage,
-  setAuthSession,
-  setPostAuthRedirect,
   syncAuthSession,
 } from "./common/AuthStorage";
-import { resetClientCache } from "./common/queryClient";
-import { canAccessOpsPage } from "./common/DevGate";
+import { resolveAuthBootstrap } from "./common/authBootstrap";
+import AuthScreen from "./pages/auth/AuthScreen";
 
-/* ── Lazy pages ── */
 const Login = lazy(() => import("./pages/auth/login/index"));
-const GrandService = lazy(() => import("./pages/auth/grandservice/index"));
 const DashboardPage = lazy(() => import("./pages/dashboard/index"));
 const ReviewsPage = lazy(() => import("./pages/reviews/index"));
 const QnaPage = lazy(() => import("./pages/qna/index"));
@@ -25,14 +19,6 @@ const GuidePage = lazy(() => import("./pages/guide/index"));
 const DevGuidePage = lazy(() => import("./pages/dev/index"));
 const ContactPage = lazy(() => import("./pages/contact/index"));
 const OpsPage = lazy(() => import("./pages/ops/index"));
-
-function DevOnlyOpsPage() {
-  const location = useLocation();
-  if (!canAccessOpsPage(location.search)) {
-    return <Navigate to={`/${location.search}`} replace />;
-  }
-  return <OpsPage />;
-}
 
 const PageLoader = () => (
   <div className="f1g-route-loader" role="status" aria-live="polite" aria-label="Đang tải">
@@ -43,40 +29,26 @@ const PageLoader = () => (
 const isPublicPath = (pathname) =>
   pathname.startsWith("/install") || pathname.startsWith("/oauth");
 
-function OrgidUrlKeeper() {
+function StoreDomainUrlKeeper() {
   const location = useLocation();
   const navigate = useNavigate();
 
   useEffect(() => {
     if (isPublicPath(location.pathname)) return;
     syncAuthSession();
-    const orgid = getOrgid();
-    if (!orgid || !isAuthVerified()) return;
+    const storeDomain = getStoreDomain() || getActiveStoreDomain();
+    if (!storeDomain || !isAuthVerified(storeDomain)) return;
 
     const params = new URLSearchParams(location.search);
-    let changed = false;
-    if (!params.get("orgid")) {
-      params.set("orgid", orgid);
-      changed = true;
-    }
-    if (params.get("session_token")) {
-      params.delete("session_token");
-      changed = true;
-    }
-    if (params.get("handoff_code")) {
-      params.delete("handoff_code");
-      changed = true;
-    }
-    if (!changed) return;
+    if (params.get("storeDomain") === storeDomain) return;
 
-    const query = params.toString();
-    navigate(`${location.pathname}${query ? `?${query}` : ""}${location.hash}`, { replace: true });
+    params.set("storeDomain", storeDomain);
+    navigate(`${location.pathname}?${params.toString()}${location.hash}`, { replace: true });
   }, [location.pathname, location.search, location.hash, navigate]);
 
   return null;
 }
 
-/* ── Error Boundary ── */
 class ErrorBoundary extends Component {
   state = { hasError: false };
   static getDerivedStateFromError() {
@@ -103,106 +75,29 @@ class ErrorBoundary extends Component {
   }
 }
 
-let handoffExchangeInFlight = false;
-
-// One-time handoff code from the OAuth redirect URL → session token via
-// POST /api/auth/session/exchange. Never stores the token in the URL.
-async function consumeHandoffFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const orgid = params.get("orgid");
-  const handoff = params.get("handoff_code");
-  if (!orgid || !handoff || handoffExchangeInFlight) return false;
-  handoffExchangeInFlight = true;
-  try {
-    const result = await exchangeHandoff(handoff);
-    if (result?.ok && result?.storeDomain && result?.sessionToken) {
-      setAuthSession(result.storeDomain, result.sessionToken);
-      const nextUrl = new URL(window.location.href);
-      nextUrl.searchParams.delete("handoff_code");
-      window.history.replaceState({}, "", nextUrl.pathname + nextUrl.search + nextUrl.hash);
-      return true;
-    }
-  } catch {
-    // Expired/consumed code — the auth effect below redirects to login.
-  } finally {
-    handoffExchangeInFlight = false;
-  }
-  return false;
-}
-
 function App() {
-  const pathname = window.location.pathname;
-  const isAuthPage = isPublicPath(pathname);
-  syncAuthSession();
-  const lastOrgidRef = useRef(getOrgid());
-
-  const currentOrgid = getOrgid();
-  const authVerified = isAuthVerified();
+  const isAuthPage = isPublicPath(window.location.pathname);
+  const [ready, setReady] = useState(isAuthPage);
 
   useEffect(() => {
-    migrateAuthStorage();
-    lastOrgidRef.current = getOrgid();
-  }, []);
-
-  useEffect(() => {
-    if (isAuthPage) return;
-    consumeHandoffFromUrl();
-
-    const searchParams = new URLSearchParams(window.location.search);
-    const pOrgid = searchParams.get("orgid");
-    const pShop = searchParams.get("shop");
-    const pSessionToken = searchParams.get("session_token");
-    const sOrgid = getOrgid();
-    const verified = isAuthVerified();
-
-    if (pOrgid && pSessionToken) {
-      setAuthSession(pOrgid, pSessionToken);
-      const nextUrl = new URL(window.location.href);
-      nextUrl.searchParams.delete("session_token");
-      window.history.replaceState({}, "", nextUrl.pathname + nextUrl.search + nextUrl.hash);
-      return;
-    }
-
-    if (pOrgid && sOrgid && pOrgid !== sOrgid) {
-      void resetClientCache();
-      clearAuthSession();
-      const loginParams = new URLSearchParams({ orgid: pOrgid });
-      if (pShop) loginParams.set("shop", pShop);
-      window.location.href = `/install/login?${loginParams.toString()}`;
-      return;
-    }
-
-    if (lastOrgidRef.current && sOrgid && lastOrgidRef.current !== sOrgid) {
-      void resetClientCache();
-    }
-    lastOrgidRef.current = sOrgid;
-
-    if (!verified || !sOrgid) {
-      setPostAuthRedirect(window.location.pathname + window.location.search + window.location.hash);
-      const loginParams = new URLSearchParams();
-      if (pOrgid) loginParams.set("orgid", pOrgid);
-      if (pShop) loginParams.set("shop", pShop);
-      const loginQuery = loginParams.toString();
-      window.location.href = loginQuery ? `/install/login?${loginQuery}` : "/install/login";
-      return;
-    }
-
-    if (verified && sOrgid && pOrgid) {
-      const nextUrl = new URL(window.location.href);
-      nextUrl.searchParams.delete("session_token");
-      nextUrl.searchParams.delete("handoff_code");
-      window.history.replaceState({}, "", nextUrl.pathname + nextUrl.search + nextUrl.hash);
-    }
+    if (isAuthPage) return undefined;
+    let cancelled = false;
+    resolveAuthBootstrap().then((result) => {
+      if (cancelled) return;
+      if (result.ready) setReady(true);
+      else window.location.replace(result.redirectTo);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [isAuthPage]);
 
-  if (!isAuthPage && (!currentOrgid || !authVerified)) {
-    return null;
-  }
+  if (!ready) return <AuthScreen />;
 
   return (
     <ErrorBoundary>
       <BrowserRouter>
-        <OrgidUrlKeeper />
+        <StoreDomainUrlKeeper />
         <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
@@ -212,10 +107,9 @@ function App() {
           <Route path="/guide" element={<GuidePage />} />
           <Route path="/dev" element={<DevGuidePage />} />
           <Route path="/contact" element={<ContactPage />} />
-          <Route path="/health" element={<DevOnlyOpsPage />} />
-          <Route path="/ops" element={<DevOnlyOpsPage />} />
+          <Route path="/health" element={<OpsPage />} />
+          <Route path="/ops" element={<OpsPage />} />
           <Route path="/install/login" element={<Login />} />
-          <Route path="/install/grandservice" element={<GrandService />} />
           <Route path="*" element={<Navigate to={`/${window.location.search}`} replace />} />
         </Routes>
         </Suspense>

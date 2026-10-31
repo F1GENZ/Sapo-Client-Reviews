@@ -2,6 +2,7 @@ import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
+import { assertUsableSecret } from '../config/secret-guard';
 
 const safeDecodeURIComponent = (value: string): string => {
   try {
@@ -28,7 +29,6 @@ const buildQueryMessageCandidates = (rawQueryString: string): string[] => {
     })
     .filter((pair) => pair.key !== 'hmac' && pair.rawKey !== 'hmac');
 
-  // Sapo requires params sorted A-Z by key (alphabetical order)
   const sorted = [...pairs].sort((a, b) => a.key.localeCompare(b.key));
 
   return [
@@ -37,11 +37,21 @@ const buildQueryMessageCandidates = (rawQueryString: string): string[] => {
   ].filter((value, index, list) => value && list.indexOf(value) === index);
 };
 
-const timingSafeHexEqual = (expectedHex: string, actualHex: string): boolean => {
-  if (!/^[a-f0-9]{64}$/i.test(actualHex)) return false;
-  const expected = Buffer.from(expectedHex, 'hex');
-  const actual = Buffer.from(actualHex, 'hex');
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+const SHA256_DIGEST_BYTES = 32;
+
+const decodeLaunchSignature = (rawQueryString: string): Buffer | null => {
+  const part = rawQueryString.split('&').find((entry) => entry.split('=')[0] === 'hmac');
+  if (!part) return null;
+  const rawValue = part.slice(part.indexOf('=') + 1).trim();
+  let value = rawValue;
+  try {
+    value = decodeURIComponent(rawValue);
+  } catch {
+    return null;
+  }
+  if (!/^[A-Za-z0-9+/]{43}=?$/.test(value)) return null;
+  const decoded = Buffer.from(value, 'base64');
+  return decoded.length === SHA256_DIGEST_BYTES ? decoded : null;
 };
 
 const parseWebhookSignature = (signature: string): Buffer | null => {
@@ -56,12 +66,17 @@ const parseWebhookSignature = (signature: string): Buffer | null => {
 
 @Injectable()
 export class HmacVerifierService {
-  constructor(@Inject(APP_ENV) private readonly env: AppEnv) {}
+  private readonly clientSecret: string;
+
+  constructor(@Inject(APP_ENV) env: AppEnv) {
+    this.clientSecret = assertUsableSecret('SAPO_CLIENT_SECRET', env.SAPO_CLIENT_SECRET);
+  }
 
   verifyLaunchQuery(rawQueryString: string): URLSearchParams {
     const params = new URLSearchParams(rawQueryString);
-    const hmac = String(params.get('hmac') || '').trim().toLowerCase();
-    if (!hmac) throw new UnauthorizedException('Missing hmac');
+    if (!rawQueryString.split('&').some((entry) => entry.split('=')[0] === 'hmac')) {
+      throw new UnauthorizedException('Missing hmac');
+    }
 
     const rawTimestamp = params.get('timestamp');
     const timestamp = Number(rawTimestamp);
@@ -73,9 +88,10 @@ export class HmacVerifierService {
       throw new UnauthorizedException('HMAC timestamp expired');
     }
 
-    const valid = buildQueryMessageCandidates(rawQueryString).some((message) => {
-      const computed = createHmac('sha256', this.env.SAPO_CLIENT_SECRET).update(message).digest('hex');
-      return timingSafeHexEqual(computed, hmac);
+    const received = decodeLaunchSignature(rawQueryString);
+    const valid = received !== null && buildQueryMessageCandidates(rawQueryString).some((message) => {
+      const computed = createHmac('sha256', this.clientSecret).update(message).digest();
+      return timingSafeEqual(computed, received);
     });
     if (!valid) throw new UnauthorizedException('Invalid hmac');
     return params;
@@ -88,8 +104,7 @@ export class HmacVerifierService {
     const received = parseWebhookSignature(signature.trim());
     if (!received) throw new UnauthorizedException('Invalid webhook HMAC');
 
-    if (!this.env.SAPO_WEBHOOK_SECRET) throw new UnauthorizedException('Missing webhook HMAC secret');
-    const computed = createHmac('sha256', this.env.SAPO_WEBHOOK_SECRET).update(rawBody).digest();
+    const computed = createHmac('sha256', this.clientSecret).update(rawBody).digest();
     const valid = received.length === computed.length && timingSafeEqual(received, computed);
     if (!valid) throw new UnauthorizedException('Invalid webhook HMAC');
   }

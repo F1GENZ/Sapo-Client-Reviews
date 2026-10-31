@@ -1,0 +1,49 @@
+# Security port: Haravan A1-A8 and follow-ups to Sapo
+
+Scope owned: `src/main.ts`, `src/common/**`, `src/media/**`, `review.controller.ts`, `qna.controller.ts`, review/qna DTOs, `sapo.controller.ts`, `env.schema.ts`, `.env.example`, `test/security.test.ts`.
+
+## Findings table
+
+| Finding | Haravan fix | Sapo state before | Action |
+|---|---|---|---|
+| A1 legacy no-HMAC admin session mint | gated behind `ALLOW_LEGACY_NO_HMAC_LAUNCH` | N/A: Sapo launch is HMAC-verified only (`hmac-verifier.service.ts`); no unsigned launch path exists | none |
+| A2 public Q&A leaks asker email/phone/raw payload | field whitelist in public Q&A | `toPublicQuestion` deleted email/phone but passed `source_raw_json`, `participantId` and any extra column through; applied only in the service | added `src/common/security/public-response.ts` (`PublicResponseInterceptor`, `sanitizePublicResponse`) enforcing an explicit field whitelist on every `/api/public/qna/*` response (list, single, POST) |
+| A3 `source_raw_json` in public reviews | typed copy without raw payload | `toPublicReview` still carried `source_raw_json`/extras | same interceptor on `/api/public/reviews/*` (list, slider-style lists, single POST). Aggregate-only routes (`summary`, `summaries`, `config/*`) are left untouched. Media items are reduced to `{url,type}` |
+| A4 CSV formula injection in exports | prefix `= + - @ \t \r` | N/A: Sapo has no CSV/export endpoint (rg for csv/export/attachment in controllers finds none) | none; revisit if an export is added |
+| A5 cookie-only CSRF on state changes | Bearer required for unsafe methods | `shop-auth.guard.ts` accepted the session cookie on POST/PUT/PATCH/DELETE (origin check only) | guard now requires an `Authorization: Bearer` token on unsafe methods; GET/HEAD/OPTIONS may still use the cookie. Origin check kept. `src/common/guards/shop-auth.guard.ts` |
+| A6 security headers | nosniff, referrer, permissions-policy, XFO, HSTS, no-store on OAuth, drop X-Powered-By | only `no-store` on `/api` and `removeHeader('X-Powered-By')` in `main.ts` | new `security-headers.ts` `applySecurityHeaders` + `corsMiddleware`; wired through `http-hardening.ts` from `main.ts`. XFO DENY only on `/api`, not on storefront assets (embeddable). HSTS only when `req.secure` or `X-Forwarded-Proto: https`. OAuth paths also get `Pragma: no-cache` |
+| A7 TRUST_PROXY and rate-limit identity | `req.ip` only; hop count 1-10 or IP/CIDR list; `true`/malformed rejected | env parser accepted `true` and any named value (`/^[a-z0-9_.:-]+$/`), meaning every `X-Forwarded-For` hop was trusted and spoofable. Identity was already `req.ip` (`client-fingerprint.ts`) | new strict parser `src/common/trust-proxy.ts` used by `env.schema.ts`; malformed values now fail startup. `main.ts` applies the parsed value and warns in production when unset. No code reads `X-Forwarded-For`/`CF-Connecting-IP` directly |
+| A7 per-route throttles on auth | 30/min on login, entry, verify-hmac, callback, install | `assertAuthRate` already on login, entry, verify-hmac, callbacks | `GET /oauth/install/start` had no throttle: added `assertAuthRate('oauth-install-start')`. Legacy `orgid`/`shop` aliases removed from login entry (Main's decision); repeated query keys coerced to the first string (previously an array could reach the service) |
+| A8 session secret fallback warning | warn when falling back to client secret | N/A: Sapo has no fallback; `APP_SESSION_SECRET` is mandatory in production (`env.schema.ts`) | none |
+| 363872c public read budgets | per-address and per-shop buckets | none: only public writes were limited | `public-rate-limit.ts`: reads capped per client (900/min) and per store (600/min), writes per client; preflight free; shop key taken only from a validated domain so rotating the header cannot mint budget; mounted on `/api/public` in `http-hardening.ts` |
+| 2898be0 / cf38d23 anonymous input bounds | DTO validation, body caps | public body parsed at the global 1 MB limit; widget config DTO unbounded (strings, numbers, `starIconUrl` was any string); sync-metafield took raw body; media ticket body untyped | `body-limits.ts`: `/api/public` 256 KB, other routes 1 MB, webhook/elevated routes configured limit; raw body kept only on the webhook path. `update-widget-config.dto.ts` bounds lengths, numeric ranges and requires an http(s) URL (or empty) for `starIconUrl`. New `sync-metafield.dto.ts` and `media/dto/presign.dto.ts` with `forbidNonWhitelisted`. Existing create-review / question DTOs already bound length, count and type |
+| 8521a7d media upload gating and single-use tickets | storefront-enabled gate before body, nonce ticket consumed once via Redis `SET NX`, 5 MB images | tickets had no nonce (replayable within 2 min); no gate before multer buffered the body; magic bytes unchecked; images capped at 500 KB | `media.service.ts`: nonce in the ticket, `inspectUploadTicket` (signature/expiry/store, no consumption) vs `verifyUploadTicket` (checks metadata, then `setNx` once; metadata mismatch does not burn the ticket); content sniffing (png/jpeg/webp/mp4) must match declared type; `IMAGE_MAX_SIZE_BYTES = 5 MB`, `MAX_UPLOAD_BYTES = image limit` (multer), video stays 2 MB. New `public-media.guard.ts` runs before multer: rate limit, store domain, live install (`resolveAccessToken`), ticket inspection; upload controller consumes the ticket after the body. `media.controller.ts` (admin) validates with `PresignDto` |
+| CORS credentials to unknown origins | credentialed only for allowed admin origins; public paths credential-less | `main.ts` echoed origin with credentials on any path guarded only by an origin check; public paths shared the same headers | `security-headers.ts`: admin origins (frontend/API/`CORS_ALLOWED_ORIGINS`) get credentials; public storefront paths (`/api/public/**`, `/storefront/**`) echo https origins without credentials; everything else is origin-less. Unknown-origin preflight on non-public paths returns 403. `X-Sapo-*` header allowances kept |
+| SSRF on user-supplied URLs | n/a (reviewed) | server fetches only the configured R2 worker URL; review media `url` fields are stored as strings and never fetched | none |
+| Session minted from public input | no session from public routes | public routes mint no session; session cookie/JWT created only after verified OAuth/launch HMAC or handoff code | none |
+
+## Route prefix fix (decision by Main)
+`ReviewController` and `QnaController` now mount at `api/admin/reviews` and `api/admin/qna` (client already prefixed `/api/admin/...`).
+
+## Public contracts kept (StorefrontPort request)
+Review and Q&A lists keep `{items,total,page,pageSize}`; public `limit` clamps to 50 in the services; `GET /api/public/reviews/summaries` accepts up to 100 ids. I changed none of those shapes; the whitelist test asserts the list key set. Image limit is 5 MB (service, multer and per-ticket check).
+
+## Files changed
+- new: `src/common/trust-proxy.ts`, `src/common/security/{security-headers,body-limits,http-hardening,public-rate-limit,public-response}.ts`, `src/media/public-media.guard.ts`, `src/media/dto/presign.dto.ts`, `src/review/dto/sync-metafield.dto.ts`, `test/security.test.ts`
+- edited: `src/main.ts`, `src/config/env.schema.ts`, `.env.example` (TRUST_PROXY documented; no new keys), `src/common/guards/shop-auth.guard.ts`, `src/media/{media.service,media.controller,public-media.controller,media.module}.ts`, `src/review/review.controller.ts`, `src/qna/qna.controller.ts`, `src/review/dto/update-widget-config.dto.ts`, `src/sapo/sapo.controller.ts`
+- not touched: `session.service.ts`, `oauth-state.service.ts` (already fine: one-time state via Redis `getDel`, `isSafeRedirect`)
+
+## Proof
+- `npm run lint`: clean. `npm run build`: clean (an earlier failure in `review.service.ts` `buildSummaryMetafields` belonged to another agent and was gone on re-run).
+- `npm test`: 64 tests, 64 pass; `test/security.test.ts` has 21 tests: TRUST_PROXY parser (incl. malformed `true`, `11`, `1e1`, bad CIDR) and `loadEnv` failure, real Express spoofed-header boundary test, header matrix, CORS matrix, body-limit matrix, read/write budgets, cookie-only vs Bearer on the guard, review/Q&A whitelists, ticket single-use/forgery/expiry/missing-nonce, 5 MB/2 MB limits, content sniffing, media gate order, DTO bounds, auth entry throttle.
+- Boot smoke (throwaway database `sapo_agent_smoke_sec` on local Postgres, created and dropped; throwaway secrets; port 38417): `node dist/main.js` boots and listens. `GET /api/public/reviews/config/widget` returned nosniff, XFO DENY, no-store, no X-Powered-By, no credentials for an unknown origin (status 500 only because the throwaway DB has no migrations applied and Redis is not running locally); `POST /api/admin/reviews/sync-metafield` with only a cookie returned 401. Child process stopped, database dropped.
+- Identifier grep (`orgid|haravan|hrv|lorid`, case-insensitive) over all files I touched: no matches.
+
+## Open risks
+- Sapo's real launch/webhook behavior is unmeasured; unchanged here.
+- Production needs `TRUST_PROXY` set to the verified hop count/CIDRs; until then all clients share one rate-limit bucket (the server logs a warning).
+- Public reads at 900/min per client and 600/min per store are carried over from Haravan and untested against real storefront traffic.
+- Redis-backed buckets fall back to per-process memory without Redis; fine for the single PM2 process.
+
+## Evidence on SAPO_SCOPE (requested by Main)
+`src/sapo/sapo-api.service.ts` defines script-tag methods (list/create/delete, around lines 441-464), but nothing outside that file calls them: `rg ScriptTag|scriptTag src` finds only the type in `sapo.types.ts`. The service has no theme or customer methods, so `read_themes`, `write_themes`, `read_customers` and `write_customers` are unused too. Default left unchanged; decision deferred to Main.

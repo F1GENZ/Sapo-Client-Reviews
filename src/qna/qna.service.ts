@@ -1,20 +1,16 @@
-import {
-  ConflictException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
+import { catalogLabels } from '../catalog/product-label';
+import type { CatalogLabel } from '../catalog/product-label';
+import { PUBLIC_MAX_OFFSET } from '../common/security/public-limits';
 import { QnaStoreService } from './qna-store.service';
-import type { QnaQuestionRecord, QnaPageOptions } from './qna-store.service';
+import type { QnaQuestionRecord } from './qna-store.service';
 import type { Question, QnaSummary } from './interfaces/qna.interface';
 import type { CreateQuestionDto } from './dto/create-question.dto';
 import type { UpdateQuestionDto } from './dto/update-question.dto';
 import type { AnswerQuestionDto } from './dto/answer-question.dto';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export type QuestionListItem = Question & {
   productId: string;
@@ -50,24 +46,18 @@ export type PublicQuestionsOptions = {
   limit?: number;
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+export type PublicQuestionsPage = { items: Question[]; total: number; page: number; pageSize: number };
 
-const generateId = (): string => randomUUID();
+const ADMIN_MAX_PAGE_SIZE = 100;
+const PUBLIC_MAX_PAGE_SIZE = 50;
+const SEARCH_MAX_LENGTH = 100;
 
-const EMPTY_STATUS_COUNTS = (): Record<QnaPageStatus, number> => ({
-  all: 0,
-  pending: 0,
-  hidden: 0,
-  answered: 0,
-  unanswered: 0,
-});
+const ANSWERED_WHERE: Prisma.QnaQuestionWhereInput = { answer: { not: null }, NOT: { answer: '' } };
+const UNANSWERED_WHERE: Prisma.QnaQuestionWhereInput = { OR: [{ answer: null }, { answer: '' }] };
 
 const isQnaPageStatus = (value: unknown): value is QnaPageStatus =>
   ['all', 'pending', 'hidden', 'answered', 'unanswered'].includes(String(value));
 
-/** Convert a Prisma row to domain Question */
 const toDomainQuestion = (row: QnaQuestionRecord): Question => ({
   id: row.questionId,
   question: row.question || '',
@@ -83,38 +73,37 @@ const toDomainQuestion = (row: QnaQuestionRecord): Question => ({
   source_raw_json: row.sourceRawJson || undefined,
 });
 
-/** Convert a Prisma row to a public Question shape with no contact PII (email/phone). */
 export const toPublicQuestion = (row: QnaQuestionRecord): Question => {
   const question = toDomainQuestion(row);
   delete question.email;
   delete question.phone;
+  delete question.source_raw_json;
   return question;
 };
 
-/** Convert a Prisma row to QuestionListItem (includes product metadata) */
-const toQuestionListItem = (row: QnaQuestionRecord): QuestionListItem => ({
-  ...toDomainQuestion(row),
-  productId: row.productId,
-  productTitle: row.productTitle || undefined,
-  productName: row.productName || undefined,
-  productHandle: row.productHandle || undefined,
-  productImage: row.productImage || undefined,
-});
+const toQuestionListItem = (row: QnaQuestionRecord, label?: CatalogLabel): QuestionListItem => {
+  const title = label?.title || row.productTitle || undefined;
+  return {
+    ...toDomainQuestion(row),
+    productId: row.productId,
+    productTitle: title,
+    productName: title || row.productName || undefined,
+    productHandle: label?.handle || row.productHandle || undefined,
+    productImage: label?.image || row.productImage || undefined,
+  };
+};
 
-// ---------------------------------------------------------------------------
-// Service
-// ---------------------------------------------------------------------------
+const normalizePublicPaging = (options: PublicQuestionsOptions): { page: number; pageSize: number } => ({
+  page: Math.max(1, options.page ?? 1),
+  pageSize: Math.min(PUBLIC_MAX_PAGE_SIZE, Math.max(1, options.limit ?? 20)),
+});
 
 @Injectable()
 export class QnaService {
-  private readonly logger = new Logger(QnaService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly qnaStore: QnaStoreService,
   ) {}
-
-  // ─── Install Resolution ──────────────────────────────────────────
 
   private async resolveInstall(storeDomain: string): Promise<{ shopId: string }> {
     const install = await this.prisma.appInstall.findUnique({
@@ -127,7 +116,14 @@ export class QnaService {
     return install;
   }
 
-  // ─── submitQuestion (called by admin + public controllers) ───────
+  private async resolveServingInstall(storeDomain: string): Promise<{ shopId: string } | null> {
+    const install = await this.prisma.appInstall.findUnique({
+      where: { storeDomain },
+      select: { shopId: true, status: true },
+    });
+    if (!install || install.status === 'uninstalled' || install.status === 'declined') return null;
+    return { shopId: install.shopId };
+  }
 
   async submitQuestion(
     storeDomain: string,
@@ -138,7 +134,7 @@ export class QnaService {
     const shopId = install.shopId;
 
     const now = Date.now();
-    const questionId = generateId();
+    const questionId = randomUUID();
 
     await this.qnaStore.upsertQuestion({
       shopId,
@@ -164,33 +160,31 @@ export class QnaService {
     };
   }
 
-  // ─── answerQuestion ──────────────────────────────────────────────
-
   async answerQuestion(
     storeDomain: string,
     productId: string,
     questionId: string,
     dto: AnswerQuestionDto,
   ): Promise<Question | null> {
+    const answer = dto.answer.trim();
+    if (!answer) throw new BadRequestException({ code: 'answer_required', message: 'Answer is required' });
+
     const install = await this.resolveInstall(storeDomain);
     const shopId = install.shopId;
 
     const existing = await this.qnaStore.getQuestion(shopId, productId, questionId);
     if (!existing) return null;
 
-    const now = Date.now();
     const record = await this.qnaStore.updateAnswer(
       shopId,
       productId,
       questionId,
-      dto.answer,
+      answer,
       dto.answered_by || 'Shop',
     );
 
     return toDomainQuestion(record);
   }
-
-  // ─── updateStatus ────────────────────────────────────────────────
 
   async updateStatus(
     storeDomain: string,
@@ -207,8 +201,6 @@ export class QnaService {
     const record = await this.qnaStore.updateStatus(shopId, productId, questionId, status);
     return toDomainQuestion(record);
   }
-
-  // ─── updateQuestion ──────────────────────────────────────────────
 
   async updateQuestion(
     storeDomain: string,
@@ -240,8 +232,6 @@ export class QnaService {
     return toDomainQuestion(record);
   }
 
-  // ─── deleteQuestion (admin) ──────────────────────────────────────
-
   async deleteQuestion(
     storeDomain: string,
     productId: string,
@@ -254,106 +244,85 @@ export class QnaService {
     return this.qnaStore.deleteQuestion(shopId, productId, questionId);
   }
 
-  // ─── getQuestions (admin single product, paginated) ──────────────
-
   async getQuestions(
     storeDomain: string,
     productId: string,
-    options: QnaPageOptions = {},
-  ): Promise<{ items: Question[]; total: number; page: number; pageSize: number }> {
+    options: Omit<ListAllQuestionsOptions, 'productId' | 'search'> = {},
+  ): Promise<QnaPage> {
     const install = await this.resolveInstall(storeDomain);
-    const shopId = install.shopId;
-
-    const result = await this.qnaStore.getQuestions(shopId, productId, options);
-    return {
-      items: result.items.map((row) => toDomainQuestion(row)),
-      total: result.total,
-      page: result.page,
-      pageSize: result.pageSize,
-    };
+    return this.listQuestions(install.shopId, { ...options, productId }, true);
   }
-
-  // ─── getAllQuestions (admin cross-product listing) ───────────────
 
   async getAllQuestions(
     storeDomain: string,
     options: ListAllQuestionsOptions = {},
   ): Promise<QnaPage> {
     const install = await this.resolveInstall(storeDomain);
-    const shopId = install.shopId;
+    return this.listQuestions(install.shopId, options, false);
+  }
 
+  private async listQuestions(
+    shopId: string,
+    options: ListAllQuestionsOptions,
+    scopeCountsToProduct: boolean,
+  ): Promise<QnaPage> {
     const page = Math.max(1, options.page ?? 1);
-    const pageSize = Math.min(100, Math.max(1, options.limit ?? 20));
-    const status: QnaPageStatus = isQnaPageStatus(options.status)
-      ? options.status
-      : 'all';
+    const pageSize = Math.min(ADMIN_MAX_PAGE_SIZE, Math.max(1, options.limit ?? 20));
+    const status: QnaPageStatus = isQnaPageStatus(options.status) ? options.status : 'all';
     const sortBy: QnaPageSort = options.sort === 'oldest' ? 'oldest' : 'newest';
 
-    // Build Prisma where
-    const where: Record<string, unknown> = { shopId };
+    const conditions: Prisma.QnaQuestionWhereInput[] = [{ shopId }];
+    if (options.productId) conditions.push({ productId: options.productId });
+    if (status === 'answered') conditions.push(ANSWERED_WHERE);
+    else if (status === 'unanswered') conditions.push(UNANSWERED_WHERE);
+    else if (status !== 'all') conditions.push({ status });
 
-    if (status === 'answered') {
-      where.answer = { not: null };
-      where.NOT = { answer: '' };
-    } else if (status === 'unanswered') {
-      where.OR = [{ answer: null }, { answer: '' }];
-    } else if (status !== 'all') {
-      where.status = status;
+    const search = options.search?.trim().slice(0, SEARCH_MAX_LENGTH);
+    if (search) {
+      conditions.push({
+        OR: [
+          { question: { contains: search, mode: Prisma.QueryMode.insensitive } },
+          { author: { contains: search, mode: Prisma.QueryMode.insensitive } },
+        ],
+      });
     }
+    const where: Prisma.QnaQuestionWhereInput = { AND: conditions };
 
-    if (options.productId) {
-      where.productId = options.productId;
+    const countScope: Prisma.QnaQuestionWhereInput =
+      scopeCountsToProduct && options.productId ? { shopId, productId: options.productId } : { shopId };
+    const [statusGroups, answeredCount, total] = await Promise.all([
+      this.prisma.qnaQuestion.groupBy({ by: ['status'], where: countScope, _count: { _all: true } }),
+      this.prisma.qnaQuestion.count({ where: { AND: [countScope, ANSWERED_WHERE] } }),
+      this.prisma.qnaQuestion.count({ where }),
+    ]);
+
+    const statusCounts: Record<QnaPageStatus, number> = {
+      all: 0,
+      pending: 0,
+      hidden: 0,
+      answered: answeredCount,
+      unanswered: 0,
+    };
+    for (const group of statusGroups) {
+      statusCounts.all += group._count._all;
+      if (group.status === 'pending') statusCounts.pending = group._count._all;
+      else if (group.status === 'hidden') statusCounts.hidden = group._count._all;
     }
+    statusCounts.unanswered = Math.max(0, statusCounts.all - answeredCount);
 
-    if (options.search) {
-      const searchConditions = [
-        { question: { contains: options.search, mode: 'insensitive' } },
-        { author: { contains: options.search, mode: 'insensitive' } },
-      ];
-      // If status already set an OR (unanswered), combine via AND
-      if (where.OR) {
-        where.AND = [
-          { OR: where.OR },
-          { OR: searchConditions },
-        ];
-        delete where.OR;
-      } else {
-        where.OR = searchConditions;
-      }
-    }
-
-    // Get status counts for the whole shop
-    const allRows = await this.prisma.qnaQuestion.findMany({
-      where: { shopId },
-      select: { status: true, answer: true },
-    });
-
-    const statusCounts = EMPTY_STATUS_COUNTS();
-    for (const row of allRows) {
-      statusCounts.all += 1;
-      const s = row.status;
-      if (s === 'pending') statusCounts.pending += 1;
-      else if (s === 'hidden') statusCounts.hidden += 1;
-      if (row.answer && row.answer !== '') statusCounts.answered += 1;
-      else statusCounts.unanswered += 1;
-    }
-
-    const orderBy = { createdAt: sortBy === 'oldest' ? ('asc' as const) : ('desc' as const) };
-
-    const total = await this.prisma.qnaQuestion.count({ where });
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const currentPage = Math.min(page, totalPages);
-    const skip = (currentPage - 1) * pageSize;
 
     const rows = await this.prisma.qnaQuestion.findMany({
       where,
-      orderBy,
-      skip,
+      orderBy: [{ createdAt: sortBy === 'oldest' ? 'asc' : 'desc' }, { id: 'asc' }],
+      skip: (currentPage - 1) * pageSize,
       take: pageSize,
     });
+    const labels = await catalogLabels(this.prisma, shopId, rows.map((row) => row.productId));
 
     return {
-      items: rows.map((row: QnaQuestionRecord) => toQuestionListItem(row)),
+      items: rows.map((row) => toQuestionListItem(row, labels.get(row.productId))),
       total,
       page: currentPage,
       pageSize,
@@ -362,65 +331,63 @@ export class QnaService {
     };
   }
 
-  // ─── getStats (admin) ────────────────────────────────────────────
-
   async getStats(
     storeDomain: string,
     productId: string,
   ): Promise<QnaSummary> {
     const install = await this.resolveInstall(storeDomain);
-    const shopId = install.shopId;
-
-    return this.qnaStore.getStats(shopId, productId);
+    return this.qnaStore.getStats(install.shopId, productId);
   }
 
-  // ─── getPublicQuestions (storefront) ─────────────────────────────
+  emptyPublicPage(options: PublicQuestionsOptions = {}): PublicQuestionsPage {
+    return { items: [], total: 0, ...normalizePublicPaging(options) };
+  }
 
   async getPublicQuestions(
     storeDomain: string,
     productId: string,
     options: PublicQuestionsOptions = {},
-  ): Promise<{ items: Question[]; total: number; page: number; pageSize: number }> {
-    const install = await this.resolveInstall(storeDomain);
-    const shopId = install.shopId;
+  ): Promise<PublicQuestionsPage> {
+    const { page, pageSize } = normalizePublicPaging(options);
+    const install = await this.resolveServingInstall(storeDomain);
+    if (!install) return { items: [], total: 0, page, pageSize };
 
-    const page = Math.max(1, options.page ?? 1);
-    const pageSize = Math.min(50, Math.max(1, options.limit ?? 20));
     const skip = (page - 1) * pageSize;
-
-    const where: Record<string, unknown> = {
-      shopId,
+    const where: Prisma.QnaQuestionWhereInput = {
+      shopId: install.shopId,
       productId,
       status: 'approved',
-      answer: { not: null },
-      NOT: { answer: '' },
+      ...ANSWERED_WHERE,
     };
 
     const [items, total] = await Promise.all([
-      this.prisma.qnaQuestion.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: pageSize,
-      }),
+      skip > PUBLIC_MAX_OFFSET
+        ? Promise.resolve([])
+        : this.prisma.qnaQuestion.findMany({
+            where,
+            orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+            skip,
+            take: pageSize,
+          }),
       this.prisma.qnaQuestion.count({ where }),
     ]);
 
     return {
-      items: (items as QnaQuestionRecord[]).map((row) => toPublicQuestion(row)),
+      items: items.map((row) => toPublicQuestion(row)),
       total,
       page,
       pageSize,
     };
   }
 
-  // ─── submitPublicQuestion ────────────────────────────────────────
-
   async submitPublicQuestion(
     storeDomain: string,
     productId: string,
     dto: CreateQuestionDto,
   ): Promise<Question> {
+    if (!(await this.resolveServingInstall(storeDomain))) {
+      throw new ConflictException({ code: 'store_not_serving', message: 'App not installed for this store' });
+    }
     return this.submitQuestion(storeDomain, productId, dto);
   }
 }

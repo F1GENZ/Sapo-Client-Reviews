@@ -2,11 +2,12 @@ import axios from "axios";
 import { reportClientError } from "../common/ErrorReporter";
 import {
   clearAuthSession,
-  getOrgid,
+  getStoreDomain,
   getSessionToken,
   setPostAuthRedirect,
   syncAuthSession,
 } from "../common/AuthStorage";
+import { buildLoginPath } from "../common/routes";
 
 const httpClient = axios.create({
   baseURL: "", // Force relative URLs (/api/...) for Cloudflare proxy
@@ -18,7 +19,6 @@ const httpClient = axios.create({
   withCredentials: true,
 });
 
-// Request interceptor — attach orgid
 httpClient.interceptors.request.use(
   async (config) => {
     if (typeof FormData !== "undefined" && config.data instanceof FormData) {
@@ -35,23 +35,11 @@ httpClient.interceptors.request.use(
 
     if (!isOAuthRequest) {
       syncAuthSession();
-      const currentParams =
-        config.params instanceof URLSearchParams
-          ? Object.fromEntries(config.params.entries())
-          : { ...(config.params || {}) };
-      const urlOrgid = new URLSearchParams(window.location.search).get("orgid");
-      const orgid = currentParams.orgid || urlOrgid || getOrgid();
-      if (Object.prototype.hasOwnProperty.call(currentParams, "orgid")) {
-        const { orgid: _orgid, ...paramsWithoutOrgid } = currentParams;
-        config.params = paramsWithoutOrgid;
-      }
-      if (orgid) {
-        config.headers["x-orgid"] = orgid;
-        config.headers.orgid = orgid;
+      const storeDomain = getStoreDomain();
+      if (storeDomain) {
+        config.headers["x-store-domain"] = storeDomain;
       }
 
-      // This bearer token is the internal app session JWT from our backend.
-      // It is distinct from the Haravan access token, which remains server-side.
       const sessionToken = getSessionToken();
       if (sessionToken) {
         config.headers.Authorization = `Bearer ${sessionToken}`;
@@ -62,7 +50,6 @@ httpClient.interceptors.request.use(
   (err) => Promise.reject(err)
 );
 
-// Response interceptor — handle 401
 httpClient.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -100,16 +87,12 @@ httpClient.interceptors.response.use(
       return httpClient(config);
     }
 
-    if (error.response?.status === 401) {
-      const orgid =
-        getOrgid() ||
-        new URLSearchParams(window.location.search).get("orgid");
+    if (status === 401 && !config.skipAuthRedirect) {
+      const storeDomain = getStoreDomain();
 
       setPostAuthRedirect(window.location.pathname + window.location.search + window.location.hash);
-      clearAuthSession(orgid);
-      window.location.href = orgid
-        ? `/install/login?orgid=${encodeURIComponent(orgid)}`
-        : `/install/login`;
+      clearAuthSession(storeDomain);
+      window.location.href = buildLoginPath({ storeDomain, error: "session_expired" });
 
       return new Promise(() => {});
     }

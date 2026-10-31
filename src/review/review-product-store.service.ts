@@ -1,11 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
+import { catalogTitles, labelUpdateFields, resolveProductLabel } from '../catalog/product-label';
 import type { RatingSummary } from './interfaces/review.interface';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import { UNREPLIED_WHERE } from './review-where';
 
 export interface ReviewProductUpsertInput {
   shopId: string;
@@ -17,7 +15,7 @@ export interface ReviewProductUpsertInput {
   email?: string | null;
   phone?: string | null;
   title?: string | null;
-  media?: unknown;
+  media?: Prisma.InputJsonValue | null;
   status?: string;
   verified?: boolean;
   pinned?: boolean;
@@ -81,13 +79,15 @@ export interface ProductStats {
   spam: number;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const DEFAULT_PAGE = 0;
 const DEFAULT_SIZE = 20;
 const MAX_SIZE = 100;
+const STATUS_KEYS = ['approved', 'pending', 'hidden', 'spam'] as const;
+
+type StatusKey = (typeof STATUS_KEYS)[number];
+
+const isStatusKey = (value: string): value is StatusKey =>
+  (STATUS_KEYS as readonly string[]).includes(value);
 
 const normalizeInt = (value: unknown, fallback: number): number => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -130,36 +130,32 @@ const buildOrderBy = (
   }
 };
 
-// ---------------------------------------------------------------------------
-// Service
-// ---------------------------------------------------------------------------
+const toMediaColumn = (
+  media: Prisma.InputJsonValue | null | undefined,
+): Prisma.InputJsonValue | typeof Prisma.DbNull | undefined => {
+  if (media === undefined) return undefined;
+  return media === null ? Prisma.DbNull : media;
+};
 
 @Injectable()
 export class ReviewProductStoreService {
-  private readonly logger = new Logger(ReviewProductStoreService.name);
-
   constructor(private readonly prisma: PrismaService) {}
-
-  // -- Create / Update -------------------------------------------------------
 
   async upsertReview(input: ReviewProductUpsertInput): Promise<ReviewProduct> {
     const now = BigInt(Date.now());
+    const label = await resolveProductLabel(this.prisma, input.shopId, input.productId, input);
 
     const data = {
       shopId: input.shopId,
       productId: input.productId,
       reviewId: input.reviewId,
-      productTitle: input.productTitle ?? null,
-      productName: input.productName ?? null,
-      productHandle: input.productHandle ?? null,
-      productImage: input.productImage ?? null,
       rating: input.rating,
       content: input.content,
       author: input.author,
       email: input.email ?? null,
       phone: input.phone ?? null,
       title: input.title ?? null,
-      media: (input.media ?? undefined) as any,
+      media: toMediaColumn(input.media),
       status: input.status || 'pending',
       verified: input.verified ?? false,
       pinned: input.pinned ?? false,
@@ -179,13 +175,12 @@ export class ReviewProductStoreService {
       },
       create: {
         ...data,
+        ...label,
         createdAt: input.createdAt ? BigInt(input.createdAt) : now,
       },
-      update: data,
+      update: { ...data, ...labelUpdateFields(label) },
     });
   }
-
-  // -- Get single ------------------------------------------------------------
 
   async getReview(
     shopId: string,
@@ -206,8 +201,6 @@ export class ReviewProductStoreService {
     return result.count > 0;
   }
 
-  // -- List for a product (paginated) ----------------------------------------
-
   async getReviews(
     shopId: string,
     productId: string,
@@ -217,10 +210,11 @@ export class ReviewProductStoreService {
     const pageSize = clampSize(options.size);
     const skip = page * pageSize;
 
-    const where: Record<string, unknown> = { shopId, productId };
-    if (options.status) {
-      where.status = options.status;
-    }
+    const where: Prisma.ReviewProductWhereInput = {
+      shopId,
+      productId,
+      ...(options.status ? { status: options.status } : {}),
+    };
 
     const orderBy = buildOrderBy(options.sort);
 
@@ -237,8 +231,6 @@ export class ReviewProductStoreService {
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
     };
   }
-
-  // -- List all reviews across products (admin dashboard) --------------------
 
   async getAllReviews(
     shopId: string,
@@ -248,10 +240,10 @@ export class ReviewProductStoreService {
     const pageSize = clampSize(options.size);
     const skip = page * pageSize;
 
-    const where: Record<string, unknown> = { shopId };
-    if (options.status) {
-      where.status = options.status;
-    }
+    const where: Prisma.ReviewProductWhereInput = {
+      shopId,
+      ...(options.status ? { status: options.status } : {}),
+    };
 
     const orderBy = buildOrderBy(options.sort);
 
@@ -268,8 +260,6 @@ export class ReviewProductStoreService {
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
     };
   }
-
-  // -- Moderation ------------------------------------------------------------
 
   async updateStatus(
     shopId: string,
@@ -288,8 +278,6 @@ export class ReviewProductStoreService {
     });
   }
 
-  // -- Stats for a single product --------------------------------------------
-
   async getStatsForProduct(
     shopId: string,
     productId: string,
@@ -307,7 +295,7 @@ export class ReviewProductStoreService {
       }),
     ]);
 
-    const counts: Record<string, number> = {
+    const counts: Record<StatusKey, number> = {
       approved: 0,
       pending: 0,
       hidden: 0,
@@ -316,7 +304,7 @@ export class ReviewProductStoreService {
 
     for (const row of statusCounts) {
       const key = row.status.toLowerCase();
-      if (key in counts) {
+      if (isStatusKey(key)) {
         counts[key] = row._count.id;
       }
     }
@@ -332,21 +320,6 @@ export class ReviewProductStoreService {
     };
   }
 
-  // -- Rating summaries ------------------------------------------------------
-
-  async calculateSummary(
-    shopId: string,
-    productId: string,
-  ): Promise<RatingSummary> {
-    const ratings = await this.prisma.reviewProduct.groupBy({
-      by: ['rating'],
-      where: { shopId, productId },
-      _count: { id: true },
-    });
-
-    return this.buildSummary(ratings);
-  }
-
   async calculatePublicSummary(
     shopId: string,
     productId: string,
@@ -360,21 +333,63 @@ export class ReviewProductStoreService {
     return this.buildSummary(ratings);
   }
 
-  // -- Stats for the entire shop (dashboard) ----------------------------
+  async calculatePublicSummaries(
+    shopId: string,
+    productIds: string[],
+  ): Promise<Map<string, RatingSummary>> {
+    const byProduct = new Map<string, Array<{ rating: number; _count: { id: number } }>>();
+    for (const id of productIds) byProduct.set(id, []);
+    if (productIds.length > 0) {
+      const groups = await this.prisma.reviewProduct.groupBy({
+        by: ['productId', 'rating'],
+        where: { shopId, productId: { in: productIds }, status: 'approved' },
+        _count: { id: true },
+      });
+      for (const group of groups) {
+        byProduct.get(group.productId)?.push({ rating: group.rating, _count: group._count });
+      }
+    }
+    const summaries = new Map<string, RatingSummary>();
+    for (const [id, ratings] of byProduct) summaries.set(id, this.buildSummary(ratings));
+    return summaries;
+  }
 
   async getStatsForShop(shopId: string) {
-    const [totalResult, statusGroups, verifiedCount, mediaCount, avgResult, products] = await Promise.all([
+    const [
+      totalResult,
+      statusGroups,
+      verifiedCount,
+      mediaCount,
+      avgResult,
+      products,
+      ratingGroups,
+      unrepliedCount,
+    ] = await Promise.all([
       this.prisma.reviewProduct.count({ where: { shopId } }),
       this.prisma.reviewProduct.groupBy({ by: ['status'], where: { shopId }, _count: true }),
       this.prisma.reviewProduct.count({ where: { shopId, verified: true } }),
       this.prisma.reviewProduct.count({ where: { shopId, media: { not: Prisma.DbNull } } }),
       this.prisma.reviewProduct.aggregate({ where: { shopId, status: 'approved' }, _avg: { rating: true } }),
-      this.prisma.reviewProduct.groupBy({ by: ['productId', 'productTitle'], where: { shopId }, _count: true, _avg: { rating: true } }),
+      this.prisma.reviewProduct.groupBy({ by: ['productId'], where: { shopId }, _count: true, _avg: { rating: true }, _max: { productTitle: true } }),
+      this.prisma.reviewProduct.groupBy({ by: ['rating'], where: { shopId, status: 'approved' }, _count: true }),
+      this.prisma.reviewProduct.count({ where: { shopId, ...UNREPLIED_WHERE } }),
     ]);
 
-    const statusCounts: Record<string, number> = { approved: 0, pending: 0, hidden: 0, spam: 0, unreplied: 0 };
+    const titles = await catalogTitles(this.prisma, shopId, products.map((p) => p.productId));
+    const globalDist: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const g of ratingGroups) {
+      if (g.rating >= 1 && g.rating <= 5) globalDist[g.rating] = g._count;
+    }
+
+    const statusCounts: Record<StatusKey | 'unreplied', number> = {
+      approved: 0,
+      pending: 0,
+      hidden: 0,
+      spam: 0,
+      unreplied: unrepliedCount,
+    };
     for (const g of statusGroups) {
-      statusCounts[g.status] = g._count;
+      if (isStatusKey(g.status)) statusCounts[g.status] = g._count;
     }
 
     return {
@@ -383,20 +398,16 @@ export class ReviewProductStoreService {
       verifiedCount,
       withMediaCount: mediaCount,
       globalAvg: Math.round((avgResult._avg.rating || 0) * 10) / 10,
-      globalDist: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
-      products: products.map((p: any) => ({
+      globalDist,
+      products: products.map((p) => ({
         productId: p.productId,
-        title: p.productTitle || '',
+        title: titles.get(p.productId) || p._max.productTitle || '',
         reviewCount: p._count,
         reviewAvg: Math.round((p._avg.rating || 0) * 10) / 10,
       })),
       productCount: products.length,
-      trend: [],
-      recentReviews: [] as any[],
     };
   }
-
-  // -- Internal helpers ------------------------------------------------------
 
   private buildSummary(
     ratings: Array<{ rating: number; _count: { id: number } }>,

@@ -21,6 +21,15 @@ type MemoryEntry = {
   expiresAt?: number;
 };
 
+const MEMORY_MAX_ENTRIES = 50_000;
+
+const INCR_WITH_TTL_SCRIPT = [
+  "local value = redis.call('INCR', KEYS[1])",
+  "local ttl = tonumber(ARGV[1])",
+  "if ttl > 0 and redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ttl) end",
+  'return value',
+].join('\n');
+
 const parseRedisValue = <T>(value: string | null): T | null => {
   if (value === null) return null;
   try {
@@ -76,6 +85,22 @@ export class RedisService implements OnModuleDestroy {
     return entry;
   }
 
+  private setMemoryEntry(key: string, entry: MemoryEntry): void {
+    if (this.memory.size >= MEMORY_MAX_ENTRIES && !this.memory.has(key)) this.evictMemory();
+    this.memory.set(key, entry);
+  }
+
+  private evictMemory(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.memory) {
+      if (entry.expiresAt && entry.expiresAt <= now) this.memory.delete(key);
+    }
+    for (const key of this.memory.keys()) {
+      if (this.memory.size < MEMORY_MAX_ENTRIES) break;
+      this.memory.delete(key);
+    }
+  }
+
   async get<T>(key: string): Promise<T | null> {
     const namespacedKey = this.namespaced(key);
     if (!this.client) return parseRedisValue<T>(this.getMemoryEntry(namespacedKey)?.value ?? null);
@@ -86,7 +111,7 @@ export class RedisService implements OnModuleDestroy {
     const namespacedKey = this.namespaced(key);
     const payload = serializeRedisValue(value);
     if (!this.client) {
-      this.memory.set(namespacedKey, {
+      this.setMemoryEntry(namespacedKey, {
         value: payload,
         expiresAt: ttlSeconds && ttlSeconds > 0 ? Date.now() + Math.floor(ttlSeconds) * 1000 : undefined,
       });
@@ -135,7 +160,7 @@ export class RedisService implements OnModuleDestroy {
     const payload = serializeRedisValue(value);
     if (!this.client) {
       if (this.getMemoryEntry(namespacedKey)) return false;
-      this.memory.set(namespacedKey, {
+      this.setMemoryEntry(namespacedKey, {
         value: payload,
         expiresAt: Date.now() + Math.max(1, Math.floor(ttlSeconds)) * 1000,
       });
@@ -179,17 +204,14 @@ export class RedisService implements OnModuleDestroy {
     if (!this.client) {
       const entry = this.getMemoryEntry(namespacedKey);
       const next = entry ? Number(entry.value || 0) + 1 : 1;
-      this.memory.set(namespacedKey, {
+      this.setMemoryEntry(namespacedKey, {
         value: String(next),
         expiresAt: entry?.expiresAt ?? (ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : undefined),
       });
       return next;
     }
-    const value = await this.client.incr(namespacedKey);
-    if (value === 1 && ttlSeconds && ttlSeconds > 0) {
-      await this.client.expire(namespacedKey, Math.floor(ttlSeconds));
-    }
-    return value;
+    const ttl = ttlSeconds && ttlSeconds > 0 ? Math.floor(ttlSeconds) : 0;
+    return Number(await this.client.eval(INCR_WITH_TTL_SCRIPT, 1, namespacedKey, ttl));
   }
 
   async ttl(key: string): Promise<number> {

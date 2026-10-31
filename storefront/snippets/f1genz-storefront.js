@@ -1,10 +1,9 @@
 (() => {
   if (window.__f1genzSapoReviewStorefrontRuntimeBooted) return;
   window.__f1genzSapoReviewStorefrontRuntimeBooted = true;
-  const LEGACY_FALLBACK_API_URL = 'https://api-sapo-reviews.f1genz.dev';
   const ACCOUNT_LOGIN_URL = '/account';
-
-  let _customerSessionPromise = null;
+  const MISSING_API_URL_MESSAGE =
+    '[f1genz-storefront] No API URL found, so the widget sends no requests. Set window.__F1GENZ_STOREFRONT_CONFIG = { apiUrl: "https://<api-host>", storeDomain: "<store>.mysapo.net" } before the script tag, or load the script from the API host (https://<api-host>/storefront/f1genz-storefront.js).';
 
   function normalizeApiUrl(value) {
     const raw = String(value || '').trim();
@@ -16,6 +15,16 @@
     } catch {
       return '';
     }
+  }
+
+  function readRuntimeConfigObject() {
+    const candidates = [
+      window.__F1GENZ_STOREFRONT_CONFIG,
+      window.F1GENZ_STOREFRONT_CONFIG,
+      window.f1genzStorefrontConfig,
+    ].filter(Boolean);
+
+    return candidates.find((candidate) => candidate && typeof candidate === 'object') || null;
   }
 
   function readRuntimeConfigFromWindow() {
@@ -61,106 +70,26 @@
   }
 
   function resolveRuntimeApiUrl() {
-    const fromWindow = readRuntimeConfigFromWindow();
-    if (fromWindow) return fromWindow;
+    const resolved = readRuntimeConfigFromWindow() || readRuntimeConfigFromScript();
+    if (resolved) return resolved;
 
-    const fromScript = readRuntimeConfigFromScript();
-    if (fromScript) return fromScript;
-
-    const fallback = normalizeApiUrl(LEGACY_FALLBACK_API_URL);
-    if (fallback && !window.__f1genzSapoReviewStorefrontRuntimeFallbackWarned) {
-      window.__f1genzSapoReviewStorefrontRuntimeFallbackWarned = true;
-      console.warn(
-        '[f1genz-storefront] Falling back to legacy API host. Publish shop.metafields.f1genz.config.value.apiUrl and expose it to the storefront runtime to avoid host drift.',
-      );
+    if (!window.__f1genzSapoReviewStorefrontRuntimeMissingApiWarned) {
+      window.__f1genzSapoReviewStorefrontRuntimeMissingApiWarned = true;
+      console.error(MISSING_API_URL_MESSAGE);
     }
-    return fallback;
+    return '';
   }
 
   function normalizeCustomerPhone(value) {
     return String(value || '').replace(/[\s\-().]/g, '').trim();
   }
 
-  function readCustomerIdentityFromWindow() {
-    const candidates = [
-      window.customer,
-      window.Customer,
-      window.Sapo && window.Sapo.customer,
-      window.sapo && window.sapo.customer,
-      window.__st && window.__st.customer,
-    ].filter(Boolean);
-
-    for (const candidate of candidates) {
-      const email = String(candidate.email || candidate.customer_email || '').trim();
-      const phone = normalizeCustomerPhone(candidate.phone || candidate.mobile || candidate.customer_phone || '');
-      if (email || phone) return { email, phone };
-    }
-
-    return { email: '', phone: '' };
-  }
-
-  function extractCustomerIdentityFromHtml(html) {
-    const text = String(html || '');
-    const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-    const phoneMatch = text.match(/(?:\+?84|0)[2-9](?:[\s\-().]*\d){8,10}/);
-    return {
-      email: emailMatch ? emailMatch[0].trim() : '',
-      phone: phoneMatch ? normalizeCustomerPhone(phoneMatch[0]) : '',
-    };
-  }
-
-  function isAccountLoginUrl(url) {
-    return /\/account\/(login|register|activate|forgot)/i.test(String(url || ''));
-  }
-
-  function isAccountLoginHtml(html) {
-    return /\/account\/login/i.test(String(html || '')) || /customer\[password\]/i.test(String(html || ''));
-  }
-
-  function mergeCustomerSession(base, next) {
-    return {
-      loggedIn: Boolean(base && base.loggedIn) || Boolean(next && next.loggedIn),
-      email: String((base && base.email) || (next && next.email) || '').trim(),
-      phone: normalizeCustomerPhone((base && base.phone) || (next && next.phone) || ''),
-    };
-  }
-
-  function checkCustomerSession(options = {}) {
-    const fromWindow = readCustomerIdentityFromWindow();
-    if (fromWindow.email || fromWindow.phone) {
-      return Promise.resolve({ loggedIn: true, ...fromWindow });
-    }
-
-    if (options.force) _customerSessionPromise = null;
-
-    if (!_customerSessionPromise) {
-      const accountUrl = `/account?f1g_auth_check=${Date.now()}`;
-      _customerSessionPromise = fetch(accountUrl, {
-        method: 'GET',
-        redirect: 'follow',
-        credentials: 'same-origin',
-        cache: 'no-store',
-      })
-        .then(async (res) => {
-          const finalUrl = String(res.url || '');
-          const html = await res.text().catch(() => '');
-          const identity = extractCustomerIdentityFromHtml(html);
-          const loggedIn = res.ok && !isAccountLoginUrl(finalUrl) && !isAccountLoginHtml(html);
-          return { loggedIn: loggedIn || !!(identity.email || identity.phone), ...identity };
-        })
-        .catch(() => ({ loggedIn: false, email: '', phone: '' }));
-    }
-
-    return _customerSessionPromise.then((session) =>
-      mergeCustomerSession(session, readCustomerIdentityFromWindow()),
-    );
-  }
-
-  function checkCustomerLoggedIn(options = {}) {
-    return checkCustomerSession(options).then((session) => Boolean(session.loggedIn));
-  }
-
   const DEFAULT_CONFIG = {
+    formPhoneMode: 'optional',
+    reviewQnaDisplayMode: 'tabs',
+  };
+
+  const RENDER_DEFAULTS = {
     titleText: 'Đánh giá sản phẩm',
     accentColor: '#f59e0b',
     starColor: '#f59e0b',
@@ -173,15 +102,11 @@
     borderColor: '#e5e7eb',
     verifiedColor: '#01ab56',
     radius: 12,
-    autoApprove: false,
     showTitle: true,
     showDate: true,
     showFilter: true,
     showSort: true,
-    emailDisplay: 'mask',
-    phoneDisplay: 'mask',
     formEmailMode: 'optional',
-    formPhoneMode: 'optional',
     formTitleMode: 'optional',
     formContentMode: 'optional',
     requireLogin: false,
@@ -197,10 +122,11 @@
     showVerified: true,
     showVerifiedAll: false,
     reviewLayout: 'list',
-    reviewQnaDisplayMode: 'stacked',
     qnaDisplayMode: 'list',
     requirePurchaseToReview: false,
   };
+
+  const FALLBACK_CONFIG = { ...RENDER_DEFAULTS, ...DEFAULT_CONFIG };
 
   const CONFIG_CACHE = new Map();
   const CONFIG_CACHE_TTL = 30000;
@@ -211,11 +137,61 @@
   const QNA_LIST_CACHE = new Map();
   const PURCHASE_ELIGIBILITY_CACHE = new Map();
   const REVIEW_SUMMARY_BATCH_DELAY = 25;
-  const REVIEW_SUMMARY_BATCH_LIMIT = 250;
+  const REVIEW_SUMMARY_BATCH_LIMIT = 100;
+  const PUBLIC_PAGE_SIZE = 50;
+  const PUBLIC_MAX_PAGES = 20;
   const PURCHASE_ELIGIBILITY_CACHE_TTL = 30000;
   const MAX_MEDIA_FILES = 5;
-  const IMAGE_MAX_SIZE = 500 * 1024;
+  const IMAGE_MAX_SIZE = 5 * 1024 * 1024; // must equal the server image limit
+  const IMAGE_SOFT_TARGET = Math.floor(1.5 * 1024 * 1024);
   const VIDEO_MAX_SIZE = 2 * 1024 * 1024;
+  const IMAGE_COMPRESS_MAX_EDGE = 1920;
+  const CRITICAL_STYLE_ID = 'f1genz-sapo-review-critical-style';
+
+  function ensureCriticalStyles() {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById(CRITICAL_STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = CRITICAL_STYLE_ID;
+    style.textContent = [
+      '.f1genz-sapo-review-file-wrap{position:relative;display:flex;align-items:center;gap:10px;flex-wrap:wrap}',
+      '.f1genz-sapo-review-file-wrap input[type="file"],',
+      '.f1genz-sapo-review-file-wrap input.f1genz-sapo-review-file-input,',
+      '#f1genz-sapo-review-input-media{display:none!important;appearance:none!important;-webkit-appearance:none!important;position:absolute!important;width:0!important;height:0!important;padding:0!important;margin:0!important;overflow:hidden!important;border:0!important;opacity:0!important;pointer-events:none!important}',
+      'label.f1genz-sapo-review-file-trigger{display:inline-flex;align-items:center;justify-content:center;cursor:pointer;margin:0;user-select:none}',
+    ].join('');
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function ensureStorefrontStylesheet() {
+    if (typeof document === 'undefined') return;
+    const apiUrl = resolveRuntimeApiUrl();
+    if (!apiUrl) return;
+    const href = `${apiUrl}/storefront/f1genz-storefront.css`;
+    const links = Array.from(document.querySelectorAll('link[href*="f1genz-storefront.css"]'));
+    const hasApplied = links.some((link) => {
+      const rel = String(link.rel || '').toLowerCase();
+      return rel.split(/\s+/).includes('stylesheet') && !rel.includes('preload');
+    });
+    if (hasApplied) return;
+    links.forEach((link) => {
+      const rel = String(link.rel || '').toLowerCase();
+      if (rel.includes('preload') || !rel.split(/\s+/).includes('stylesheet')) {
+        link.rel = 'stylesheet';
+        link.removeAttribute('as');
+      }
+    });
+    if (!links.length) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      (document.head || document.documentElement).appendChild(link);
+    }
+  }
+
+  ensureCriticalStyles();
+  ensureStorefrontStylesheet();
+
   const AVATAR_COLORS = [
     '#f43f5e',
     '#ec4899',
@@ -236,7 +212,7 @@
 
   const normalizeRadius = (value) => {
     const numeric = Number(value);
-    return Number.isFinite(numeric) ? Math.max(0, numeric) : DEFAULT_CONFIG.radius;
+    return Number.isFinite(numeric) ? Math.max(0, numeric) : RENDER_DEFAULTS.radius;
   };
 
   function escapeHTML(value) {
@@ -247,6 +223,32 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  function richTextAnchor(url, label) {
+    return `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer nofollow" class="f1genz-sapo-link">${escapeHTML(label)}</a>`;
+  }
+
+  function formatSafeRichText(value) {
+    if (value === null || value === undefined) return '';
+    const text = String(value);
+    const pattern = /\[([^\]\r\n]+)\]\s*\(\s*(https?:\/\/[^\s()<>"]+)\s*\)|(^|[\s("“])(https?:\/\/[^\s<>")”]+)/gi;
+    let output = '';
+    let cursor = 0;
+    let match;
+    while ((match = pattern.exec(text))) {
+      output += escapeHTML(text.slice(cursor, match.index));
+      if (match[2]) {
+        output += richTextAnchor(match[2], match[1]);
+      } else {
+        const trailing = /[.,;:!?]+$/.exec(match[4]);
+        const url = trailing ? match[4].slice(0, -trailing[0].length) : match[4];
+        output += escapeHTML(match[3]) + richTextAnchor(url, url) + (trailing ? escapeHTML(trailing[0]) : '');
+      }
+      cursor = pattern.lastIndex;
+    }
+    output += escapeHTML(text.slice(cursor));
+    return output.replace(/\r?\n/g, '<br>');
   }
 
   function withStoreDomainParam(url, storeDomain) {
@@ -295,7 +297,10 @@
             message = payload.error;
           }
         }
-        throw new Error(message || `API Error ${response.status}`);
+        const failure = new Error(message || `API Error ${response.status}`);
+        failure.status = response.status;
+        failure.code = payload && typeof payload === 'object' && typeof payload.code === 'string' ? payload.code : '';
+        throw failure;
       }
 
       if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'data')) {
@@ -303,6 +308,25 @@
       }
       return payload;
     });
+  }
+
+  const PUBLIC_ERROR_MESSAGES = {
+    identity_required: 'Vui lòng nhập Email hoặc Số điện thoại để xác minh mua hàng.',
+    purchase_required: 'Chỉ khách đã mua sản phẩm này mới có thể đánh giá.',
+    purchase_check_unavailable: 'Chưa xác minh được đơn mua hàng lúc này. Vui lòng thử lại sau.',
+    store_not_serving: 'Cửa hàng hiện chưa nhận nội dung gửi từ khách. Vui lòng thử lại sau.',
+    qna_disabled: 'Cửa hàng đã tắt chức năng hỏi đáp.',
+    product_not_found: 'Không tìm thấy sản phẩm này. Vui lòng tải lại trang.',
+    media_type_not_allowed: 'Cửa hàng không nhận loại tệp này (ảnh hoặc video). Vui lòng bỏ tệp và thử lại.',
+  };
+  const RATE_LIMIT_MESSAGE = 'Bạn thao tác quá nhanh. Vui lòng đợi một lúc rồi thử lại.';
+
+  function publicErrorMessage(error, fallback) {
+    if (error && typeof error.code === 'string' && Object.prototype.hasOwnProperty.call(PUBLIC_ERROR_MESSAGES, error.code)) {
+      return PUBLIC_ERROR_MESSAGES[error.code];
+    }
+    if (error && error.status === 429) return RATE_LIMIT_MESSAGE;
+    return error instanceof Error && error.message ? error.message : fallback;
   }
 
   function normalizeFormMode(value, fallback, legacyRequired) {
@@ -315,29 +339,29 @@
   function normalizeWidgetConfig(config) {
     const source = config || {};
     const next = {
-      ...DEFAULT_CONFIG,
+      ...FALLBACK_CONFIG,
       ...source,
     };
-    next.formTitleMode = normalizeFormMode(source.formTitleMode, DEFAULT_CONFIG.formTitleMode);
-    next.formContentMode = normalizeFormMode(source.formContentMode, DEFAULT_CONFIG.formContentMode, source.formContentRequired);
-    next.formEmailMode = normalizeFormMode(source.formEmailMode, DEFAULT_CONFIG.formEmailMode);
-    next.formPhoneMode = normalizeFormMode(source.formPhoneMode, DEFAULT_CONFIG.formPhoneMode);
+    next.formTitleMode = normalizeFormMode(source.formTitleMode, FALLBACK_CONFIG.formTitleMode);
+    next.formContentMode = normalizeFormMode(source.formContentMode, FALLBACK_CONFIG.formContentMode, source.formContentRequired);
+    next.formEmailMode = normalizeFormMode(source.formEmailMode, FALLBACK_CONFIG.formEmailMode);
+    next.formPhoneMode = normalizeFormMode(source.formPhoneMode, FALLBACK_CONFIG.formPhoneMode);
     next.reviewQnaDisplayMode = source.reviewQnaDisplayMode === 'tabs' || source.reviewQnaDisplayMode === 'stacked'
       ? source.reviewQnaDisplayMode
-      : DEFAULT_CONFIG.reviewQnaDisplayMode;
+      : FALLBACK_CONFIG.reviewQnaDisplayMode;
     return next;
   }
 
   function getFormContentMode(config) {
-    return normalizeFormMode(config && config.formContentMode, DEFAULT_CONFIG.formContentMode, config && config.formContentRequired);
+    return normalizeFormMode(config && config.formContentMode, FALLBACK_CONFIG.formContentMode, config && config.formContentRequired);
   }
 
   function getFormPhoneMode(config) {
-    return normalizeFormMode(config && config.formPhoneMode, DEFAULT_CONFIG.formPhoneMode);
+    return normalizeFormMode(config && config.formPhoneMode, FALLBACK_CONFIG.formPhoneMode);
   }
 
   function getFormEmailMode(config) {
-    return normalizeFormMode(config && config.formEmailMode, DEFAULT_CONFIG.formEmailMode);
+    return normalizeFormMode(config && config.formEmailMode, FALLBACK_CONFIG.formEmailMode);
   }
 
   function requiresPurchaseIdentity(config) {
@@ -359,8 +383,17 @@
     return /^https:\/\/[^\s<>"']{1,2000}$/i.test(url) ? url : '';
   }
 
+  const SUBMITTABLE_VIDEO_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'vimeo.com', 'www.vimeo.com', 'player.vimeo.com'];
+
   function normalizeVideoLink(value) {
-    return normalizeHttpsUrl(value);
+    const url = normalizeHttpsUrl(value);
+    if (!url) return '';
+    try {
+      if (!SUBMITTABLE_VIDEO_HOSTS.includes(new URL(url).host.toLowerCase())) return '';
+    } catch {
+      return '';
+    }
+    return getVideoEmbedUrl(url) ? url : '';
   }
 
   function isDirectVideoUrl(value) {
@@ -389,6 +422,10 @@
         const id = parsed.pathname.split('/').filter(Boolean)[0];
         if (/^\d+$/.test(id || '')) return `https://player.vimeo.com/video/${id}`;
       }
+      if (parsed.hostname.toLowerCase() === 'player.vimeo.com') {
+        const player = /^\/video\/(\d+)/.exec(parsed.pathname);
+        if (player) return `https://player.vimeo.com/video/${player[1]}`;
+      }
     } catch {
       return '';
     }
@@ -406,7 +443,10 @@
 
     const promise = fetchJSON(`${apiUrl}/api/public/reviews/config/widget`, storeDomain)
       .then((config) => normalizeWidgetConfig(config))
-      .catch(() => normalizeWidgetConfig());
+      .catch(() => {
+        CONFIG_CACHE.delete(cacheKey);
+        return normalizeWidgetConfig();
+      });
     CONFIG_CACHE.set(cacheKey, { createdAt: now, promise });
     return promise;
   }
@@ -427,7 +467,7 @@
       return cached.promise;
     }
 
-    const promise = fetchJSON(`${apiUrl}/api/public/reviews/${normalizedProductId}/purchase-eligibility`, storeDomain, {
+    const promise = fetchJSON(`${apiUrl}/api/public/reviews/${encodeURIComponent(normalizedProductId)}/purchase-eligibility`, storeDomain, {
       method: 'POST',
       body: { email, phone },
     }).then((result) => ({
@@ -479,18 +519,47 @@
     QNA_LIST_CACHE.delete(reviewCacheKey(apiUrl, storeDomain, productId));
   }
 
+  function readPublicPage(payload) {
+    if (Array.isArray(payload)) return { rows: payload, total: null };
+    if (payload && Array.isArray(payload.items)) {
+      const total = Number(payload.total);
+      return { rows: payload.items, total: Number.isFinite(total) ? total : null };
+    }
+    return { rows: [], total: null };
+  }
+
+  async function fetchAllPublicPages(baseUrl, storeDomain) {
+    const seen = new Set();
+    const rows = [];
+    for (let pageNumber = 1; pageNumber <= PUBLIC_MAX_PAGES; pageNumber += 1) {
+      let payload;
+      try {
+        payload = await fetchJSON(`${baseUrl}?page=${pageNumber}&limit=${PUBLIC_PAGE_SIZE}`, storeDomain);
+      } catch (error) {
+        if (pageNumber === 1) throw error;
+        break;
+      }
+      const page = readPublicPage(payload);
+      let added = 0;
+      page.rows.forEach((row) => {
+        const key = String(row && row.id != null ? row.id : '');
+        if (key && seen.has(key)) return;
+        if (key) seen.add(key);
+        rows.push(row);
+        added += 1;
+      });
+      if (!added || page.rows.length < PUBLIC_PAGE_SIZE || (page.total !== null && rows.length >= page.total)) break;
+    }
+    return rows;
+  }
+
   function getPublicReviews(apiUrl, storeDomain, productId) {
     const normalizedProductId = String(productId || '').trim();
     if (!apiUrl || !storeDomain || !normalizedProductId) return Promise.resolve([]);
     const cacheKey = reviewCacheKey(apiUrl, storeDomain, normalizedProductId);
     if (REVIEW_LIST_CACHE.has(cacheKey)) return REVIEW_LIST_CACHE.get(cacheKey);
 
-    const request = fetchJSON(`${apiUrl}/api/public/reviews/${normalizedProductId}`, storeDomain)
-      .then((reviews) => {
-        const safeReviews = Array.isArray(reviews) ? reviews : [];
-        REVIEW_SUMMARY_CACHE.set(cacheKey, calculateReviewSummaryFromReviews(safeReviews));
-        return safeReviews;
-      })
+    const request = fetchAllPublicPages(`${apiUrl}/api/public/reviews/${encodeURIComponent(normalizedProductId)}`, storeDomain)
       .catch((error) => {
         REVIEW_LIST_CACHE.delete(cacheKey);
         throw error;
@@ -505,8 +574,7 @@
     const cacheKey = reviewCacheKey(apiUrl, storeDomain, normalizedProductId);
     if (QNA_LIST_CACHE.has(cacheKey)) return QNA_LIST_CACHE.get(cacheKey);
 
-    const request = fetchJSON(`${apiUrl}/api/public/qna/${normalizedProductId}`, storeDomain)
-      .then((questions) => (Array.isArray(questions) ? questions : []))
+    const request = fetchAllPublicPages(`${apiUrl}/api/public/qna/${encodeURIComponent(normalizedProductId)}`, storeDomain)
       .catch((error) => {
         QNA_LIST_CACHE.delete(cacheKey);
         throw error;
@@ -536,10 +604,10 @@
       REVIEW_SUMMARY_BATCHES.set(batchKey, batch);
     }
 
-    const promise = new Promise((resolve) => {
-      const resolvers = batch.items.get(normalizedProductId) || [];
-      resolvers.push(resolve);
-      batch.items.set(normalizedProductId, resolvers);
+    const promise = new Promise((resolve, reject) => {
+      const subscribers = batch.items.get(normalizedProductId) || [];
+      subscribers.push({ resolve, reject });
+      batch.items.set(normalizedProductId, subscribers);
     });
     REVIEW_SUMMARY_INFLIGHT.set(cacheKey, promise);
 
@@ -566,7 +634,7 @@
         fetchJSON(
           `${batch.apiUrl}/api/public/reviews/summaries?productIds=${ids.map(encodeURIComponent).join(',')}`,
           batch.storeDomain,
-        ).catch(() => ({})),
+        ),
       ),
     ).then((results) => {
       const summaries = Object.assign({}, ...results);
@@ -575,13 +643,13 @@
         const summary = summaries[productId] || emptyReviewSummary();
         REVIEW_SUMMARY_CACHE.set(cacheKey, summary);
         REVIEW_SUMMARY_INFLIGHT.delete(cacheKey);
-        (batch.items.get(productId) || []).forEach((resolve) => resolve(summary));
+        (batch.items.get(productId) || []).forEach(({ resolve }) => resolve(summary));
       });
-    }).catch(() => {
+    }).catch((error) => {
       productIds.forEach((productId) => {
         const cacheKey = `${batch.apiUrl}::${batch.storeDomain}::${productId}`;
         REVIEW_SUMMARY_INFLIGHT.delete(cacheKey);
-        (batch.items.get(productId) || []).forEach((resolve) => resolve(emptyReviewSummary()));
+        (batch.items.get(productId) || []).forEach(({ reject }) => reject(error));
       });
     });
   }
@@ -612,26 +680,13 @@
     return `${day}/${month}/${date.getFullYear()}`;
   }
 
-  function maskValue(value, type) {
-    if (!value) return '';
-    if (type === 'email') {
-      const [local, domain] = String(value).split('@');
-      if (!local || !domain) return '***';
-      const visible = Math.max(2, Math.ceil(local.length / 3));
-      return `${local.slice(0, visible)}***@${domain}`;
-    }
-    const phone = String(value);
-    if (phone.length <= 5) return '***';
-    return `${phone.slice(0, 3)}***${phone.slice(-2)}`;
-  }
-
   function renderStar(config, filled, size) {
     if (config.starIconUrl) {
       return `<img src="${escapeHTML(config.starIconUrl)}" alt="" width="${size}" height="${size}" style="width:${size}px;height:${size}px;object-fit:contain;opacity:${filled ? '1' : '0.25'}">`;
     }
     const color = filled
-      ? (config.starColor || DEFAULT_CONFIG.starColor)
-      : (config.starBgColor || DEFAULT_CONFIG.starBgColor);
+      ? (config.starColor || RENDER_DEFAULTS.starColor)
+      : (config.starBgColor || RENDER_DEFAULTS.starBgColor);
     return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" style="color:${escapeHTML(color)}"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`;
   }
 
@@ -641,13 +696,6 @@
       html += renderStar(config, Number(rating) >= index, size);
     }
     return html;
-  }
-
-  function renderContactIcon(type) {
-    if (type === 'user') {
-      return '<svg class="f1genz-sapo-review-card__contact-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>';
-    }
-    return '<svg class="f1genz-sapo-review-card__contact-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.35 1.9.66 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.31 1.85.53 2.81.66A2 2 0 0 1 22 16.92z"/></svg>';
   }
 
   function collectReviewMedia(review, config) {
@@ -683,18 +731,134 @@
     return String(value == null || value === '' ? fallbackIndex : value);
   }
 
+  function loadImageElement(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('Không đọc được ảnh. Thử JPEG/PNG/WebP.'));
+      };
+      img.src = url;
+    });
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise((resolve) => {
+      if (typeof canvas.toBlob === 'function') {
+        canvas.toBlob((blob) => resolve(blob || null), type, quality);
+        return;
+      }
+      try {
+        const dataUrl = canvas.toDataURL(type, quality);
+        const parts = dataUrl.split(',');
+        const byteString = atob(parts[1] || '');
+        const mimeMatch = parts[0] && parts[0].match(/:(.*?);/);
+        const mime = (mimeMatch && mimeMatch[1]) || type;
+        const buffer = new ArrayBuffer(byteString.length);
+        const view = new Uint8Array(buffer);
+        for (let i = 0; i < byteString.length; i += 1) view[i] = byteString.charCodeAt(i);
+        resolve(new Blob([buffer], { type: mime }));
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  function toUploadFile(blobOrFile, filename, type) {
+    if (typeof File === 'function') {
+      return new File([blobOrFile], filename, {
+        type: type || blobOrFile.type || 'application/octet-stream',
+        lastModified: Date.now(),
+      });
+    }
+    const blob = blobOrFile instanceof Blob
+      ? blobOrFile
+      : new Blob([blobOrFile], { type: type || 'application/octet-stream' });
+    try {
+      blob.name = filename;
+    } catch {
+    }
+    return blob;
+  }
+
+  function imageBaseName(file) {
+    const raw = String((file && file.name) || 'review-image').trim() || 'review-image';
+    return raw.replace(/\.[^.]+$/, '') || 'review-image';
+  }
+
+  async function prepareImageForUpload(file) {
+    if (!file || !String(file.type || '').startsWith('image/')) return file;
+    if (file.size <= IMAGE_SOFT_TARGET) return file;
+
+    let img;
+    try {
+      img = await loadImageElement(file);
+    } catch {
+      if (file.size <= IMAGE_MAX_SIZE) return file;
+      throw new Error('Không đọc được ảnh để nén. Dùng JPEG/PNG/WebP.');
+    }
+
+    const srcW = img.naturalWidth || img.width || 0;
+    const srcH = img.naturalHeight || img.height || 0;
+    if (!srcW || !srcH) {
+      if (file.size <= IMAGE_MAX_SIZE) return file;
+      throw new Error('Ảnh không hợp lệ.');
+    }
+
+    let scale = Math.min(1, IMAGE_COMPRESS_MAX_EDGE / Math.max(srcW, srcH));
+    let quality = 0.82;
+    let bestBlob = null;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const width = Math.max(1, Math.round(srcW * scale));
+      const height = Math.max(1, Math.round(srcH * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) break;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const blob = await canvasToBlob(canvas, 'image/jpeg', quality);
+      if (!blob) break;
+      if (!bestBlob || blob.size < bestBlob.size) bestBlob = blob;
+
+      if (blob.size <= IMAGE_SOFT_TARGET) {
+        return toUploadFile(blob, `${imageBaseName(file)}.jpg`, 'image/jpeg');
+      }
+
+      quality = Math.max(0.45, quality - 0.1);
+      if (quality <= 0.5 && scale > 0.35) {
+        scale *= 0.75;
+        quality = 0.72;
+      }
+    }
+
+    if (bestBlob && bestBlob.size <= IMAGE_MAX_SIZE) {
+      return toUploadFile(bestBlob, `${imageBaseName(file)}.jpg`, 'image/jpeg');
+    }
+    if (file.size <= IMAGE_MAX_SIZE) return file;
+    throw new Error('Không nén được ảnh xuống dưới 5MB. Chọn ảnh nhỏ hơn.');
+  }
+
   function uploadPublicFile(apiUrl, storeDomain, productId, file) {
+    const filename = file.name || 'review-image.jpg';
+    const contentType = file.type || 'application/octet-stream';
     return fetchJSON(`${apiUrl}/api/public/media/ticket`, storeDomain, {
       method: 'POST',
       body: {
         productId,
-        filename: file.name,
-        contentType: file.type,
+        contentType,
         fileSize: file.size,
       },
     }).then((ticketData) => {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', file, filename);
       return fetchJSON(
         `${apiUrl}/api/public/media/upload?productId=${encodeURIComponent(productId)}&ticket=${encodeURIComponent(ticketData.ticket)}`,
         storeDomain,
@@ -745,29 +909,26 @@
     if (totalPages <= 1) return '';
 
     const items = getPaginationItems(currentPage, totalPages);
-    return `<nav class="f1genz-sapo-review-pagination" aria-label="Phân trang">
-      <button type="button" class="f1genz-sapo-review-pagination__btn" data-action="page-prev" aria-label="Trang trước" ${currentPage <= 1 ? 'disabled' : ''}>Trước</button>
+    return `<nav class="f1genz-sapo-review-pagination" aria-label="Phân trang"><button type="button" class="f1genz-sapo-review-pagination__btn" data-action="page-prev" aria-label="Trang trước" ${currentPage <= 1 ? 'disabled' : ''}>Trước</button>
       ${items.map((item) => {
         if (String(item).startsWith('ellipsis')) {
           return '<span class="f1genz-sapo-review-pagination__ellipsis" aria-hidden="true">…</span>';
         }
         return `<button type="button" class="f1genz-sapo-review-pagination__btn ${item === currentPage ? 'f1genz-sapo-review-pagination__btn--active' : ''}" data-action="page-set" data-page="${item}" aria-label="Trang ${item}" ${item === currentPage ? 'aria-current="page"' : ''}>${item}</button>`;
       }).join('')}
-      <button type="button" class="f1genz-sapo-review-pagination__btn" data-action="page-next" aria-label="Trang sau" ${currentPage >= totalPages ? 'disabled' : ''}>Sau</button>
-    </nav>`;
+      <button type="button" class="f1genz-sapo-review-pagination__btn" data-action="page-next" aria-label="Trang sau" ${currentPage >= totalPages ? 'disabled' : ''}>Sau</button></nav>`;
   }
 
   class F1GBaseElement extends HTMLElement {
     constructor() {
       super();
-      this.config = { ...DEFAULT_CONFIG };
+      this.config = { ...FALLBACK_CONFIG };
       this.state = {};
       this._bootPromise = null;
-      this._customerLoggedIn = false;
     }
 
     get shouldRequireLogin() {
-      return this.config.requireLogin && !this._customerLoggedIn;
+      return !!this.config.requireLogin && !this.hasCustomerIdentity;
     }
 
     get apiUrl() {
@@ -794,20 +955,6 @@
       return !!(String(this.customerEmail).trim() || String(this.customerPhone).trim());
     }
 
-    applyCustomerSession(session = {}) {
-      const email = String(session.email || '').trim();
-      const phone = normalizeCustomerPhone(session.phone || '');
-      if (email && !String(this.customerEmail).trim()) {
-        this.setAttribute('customer-email', email);
-      }
-      if (phone && !String(this.customerPhone).trim()) {
-        this.setAttribute('customer-phone', phone);
-      }
-      if (session.loggedIn || email || phone) {
-        this._customerLoggedIn = true;
-      }
-    }
-
     connectedCallback() {
       if (!this._bootPromise) {
         this._bootPromise = this.bootstrap();
@@ -815,6 +962,8 @@
     }
 
     async bootstrap() {
+      ensureCriticalStyles();
+      ensureStorefrontStylesheet();
       if (!this.apiUrl || !this.storeDomain) {
         this.renderPlaceholder('');
         return;
@@ -822,13 +971,9 @@
       try {
         this.config = await getWidgetConfig(this.apiUrl, this.storeDomain);
       } catch {
-        this.config = { ...DEFAULT_CONFIG };
+        this.config = { ...FALLBACK_CONFIG };
       }
       this.applyTheme(this.config);
-      if (this.config.requireLogin || requiresPurchaseIdentity(this.config)) {
-        const session = await checkCustomerSession();
-        this.applyCustomerSession(session);
-      }
       await this.initialize();
     }
 
@@ -839,20 +984,20 @@
       const radiusSm = Math.max(0, Math.round(radius * 0.67));
       const radiusXs = Math.max(0, Math.round(radius * 0.5));
 
-      this.style.setProperty('--f1genz-sapo-review-accent', config.accentColor || DEFAULT_CONFIG.accentColor);
-      this.style.setProperty('--f1genz-sapo-review-star-color', config.starColor || DEFAULT_CONFIG.starColor);
-      this.style.setProperty('--f1genz-sapo-review-star-empty', config.starBgColor || DEFAULT_CONFIG.starBgColor);
-      this.style.setProperty('--f1genz-sapo-review-text', config.textColor || DEFAULT_CONFIG.textColor);
-      this.style.setProperty('--f1genz-sapo-review-text-muted', config.mutedColor || DEFAULT_CONFIG.mutedColor);
-      this.style.setProperty('--f1genz-sapo-review-bg', config.bgColor || DEFAULT_CONFIG.bgColor);
-      this.style.setProperty('--f1genz-sapo-review-bg-alt', config.bgAltColor || DEFAULT_CONFIG.bgAltColor);
-      this.style.setProperty('--f1genz-sapo-review-border', config.borderColor || DEFAULT_CONFIG.borderColor);
+      this.style.setProperty('--f1genz-sapo-review-accent', config.accentColor || RENDER_DEFAULTS.accentColor);
+      this.style.setProperty('--f1genz-sapo-review-star-color', config.starColor || RENDER_DEFAULTS.starColor);
+      this.style.setProperty('--f1genz-sapo-review-star-empty', config.starBgColor || RENDER_DEFAULTS.starBgColor);
+      this.style.setProperty('--f1genz-sapo-review-text', config.textColor || RENDER_DEFAULTS.textColor);
+      this.style.setProperty('--f1genz-sapo-review-text-muted', config.mutedColor || RENDER_DEFAULTS.mutedColor);
+      this.style.setProperty('--f1genz-sapo-review-bg', config.bgColor || RENDER_DEFAULTS.bgColor);
+      this.style.setProperty('--f1genz-sapo-review-bg-alt', config.bgAltColor || RENDER_DEFAULTS.bgAltColor);
+      this.style.setProperty('--f1genz-sapo-review-border', config.borderColor || RENDER_DEFAULTS.borderColor);
       this.style.setProperty('--f1genz-sapo-review-radius', `${radius}px`);
       this.style.setProperty('--f1genz-sapo-review-radius-sm', `${radiusSm}px`);
       this.style.setProperty('--f1genz-sapo-review-radius-xs', `${radiusXs}px`);
-      this.style.setProperty('--f1genz-sapo-review-verified', config.verifiedColor || DEFAULT_CONFIG.verifiedColor);
-      this.style.setProperty('--f1genz-sapo-review-reply-bg', config.replyBgColor || DEFAULT_CONFIG.replyBgColor);
-      this.style.setProperty('--f1genz-sapo-review-reply-border', config.replyBorderColor || DEFAULT_CONFIG.replyBorderColor);
+      this.style.setProperty('--f1genz-sapo-review-verified', config.verifiedColor || RENDER_DEFAULTS.verifiedColor);
+      this.style.setProperty('--f1genz-sapo-review-reply-bg', config.replyBgColor || RENDER_DEFAULTS.replyBgColor);
+      this.style.setProperty('--f1genz-sapo-review-reply-border', config.replyBorderColor || RENDER_DEFAULTS.replyBorderColor);
     }
 
     renderTemplate(markup) {
@@ -987,8 +1132,16 @@
         this.render();
       }
       try {
-        const reviews = await getPublicReviews(this.apiUrl, this.storeDomain, this.productId);
-        const summary = calculateReviewSummaryFromReviews(reviews);
+        const [reviews, remoteSummary] = await Promise.all([
+          getPublicReviews(this.apiUrl, this.storeDomain, this.productId),
+          this.productId
+            ? fetchJSON(`${this.apiUrl}/api/public/reviews/${encodeURIComponent(this.productId)}/summary`, this.storeDomain).catch(() => null)
+            : null,
+        ]);
+        const calculatedSummary = calculateReviewSummaryFromReviews(reviews);
+        const summary = remoteSummary && typeof remoteSummary === 'object'
+          ? { ...calculatedSummary, ...remoteSummary }
+          : calculatedSummary;
         this.state.loading = false;
         this.state.reviews = Array.isArray(reviews)
           ? reviews.map((review) => normalizeReview(review, this.config))
@@ -1024,7 +1177,7 @@
     getPurchaseIdentity() {
       return {
         email: String(this.customerEmail || '').trim(),
-        phone: String(this.customerPhone || '').trim(),
+        phone: normalizeCustomerPhone(this.customerPhone),
       };
     }
 
@@ -1121,12 +1274,7 @@
 
     ensureReviewShell() {
       if (this.querySelector('[data-f1genz-sapo-review-region="summary"]')) return;
-      this.renderTemplate(`<div class="f1genz-sapo-review-preview">
-          <div data-f1genz-sapo-review-region="summary"></div>
-          <div data-f1genz-sapo-review-region="list"></div>
-          <div data-f1genz-sapo-review-region="modal"></div>
-          <div data-f1genz-sapo-review-region="lightbox"></div>
-        </div>`);
+      this.renderTemplate('<div class="f1genz-sapo-review-preview"><div data-f1genz-sapo-review-region="summary"></div><div data-f1genz-sapo-review-region="list"></div><div data-f1genz-sapo-review-region="modal"></div><div data-f1genz-sapo-review-region="lightbox"></div></div>');
     }
 
     updateReviewRegion(name, markup) {
@@ -1387,22 +1535,43 @@
       if (target.id === 'f1genz-sapo-review-input-media') {
         const nextFiles = Array.from(target.files || []);
         this.state.formError = '';
-        nextFiles.forEach((file) => {
-          const isVideo = file.type.startsWith('video/');
-          const maxSize = isVideo ? VIDEO_MAX_SIZE : IMAGE_MAX_SIZE;
-          if (file.size > maxSize) {
-            this.state.formError = `Mỗi ${isVideo ? 'video' : 'ảnh'} chỉ được tối đa ${isVideo ? '2MB' : '500KB'}.`;
-            return;
-          }
-          if (this.state.formFiles.length >= MAX_MEDIA_FILES) {
-            this.state.formError = `Chỉ được tải tối đa ${MAX_MEDIA_FILES} tệp.`;
-            return;
-          }
-          this.state.formFiles.push(file);
-        });
         target.value = '';
-        this.syncPreviewUrls(this.state.formFiles);
-        this.renderModalRegion();
+
+        const processFiles = async () => {
+          for (const file of nextFiles) {
+            if (this.state.formFiles.length >= MAX_MEDIA_FILES) {
+              this.state.formError = `Chỉ được tải tối đa ${MAX_MEDIA_FILES} tệp.`;
+              break;
+            }
+
+            const isVideo = String(file.type || '').startsWith('video/');
+            let ready = file;
+
+            if (!isVideo) {
+              try {
+                ready = await prepareImageForUpload(file);
+              } catch (error) {
+                this.state.formError = error instanceof Error && error.message
+                  ? error.message
+                  : 'Không xử lý được ảnh. Thử JPEG/PNG/WebP nhỏ hơn 5MB.';
+                continue;
+              }
+            }
+
+            const maxSize = isVideo ? VIDEO_MAX_SIZE : IMAGE_MAX_SIZE;
+            if (ready.size > maxSize) {
+              this.state.formError = `Mỗi ${isVideo ? 'video' : 'ảnh'} chỉ được tối đa ${isVideo ? '2MB' : '5MB'}.`;
+              continue;
+            }
+
+            this.state.formFiles.push(ready);
+          }
+
+          this.syncPreviewUrls(this.state.formFiles);
+          this.renderModalRegion();
+        };
+
+        processFiles();
       }
     }
 
@@ -1421,10 +1590,6 @@
       try {
         this.config = await getWidgetConfig(this.apiUrl, this.storeDomain, { force: true });
         this.applyTheme(this.config);
-        if (this.config.requireLogin || requiresPurchaseIdentity(this.config)) {
-          const session = await checkCustomerSession({ force: true });
-          this.applyCustomerSession(session);
-        }
       } catch {
         this.config = normalizeWidgetConfig(this.config);
       }
@@ -1578,7 +1743,7 @@
         return;
       }
       if (rawVideoUrl && !videoUrl) {
-        this.state.formError = 'Link video phải là URL HTTPS hợp lệ.';
+        this.state.formError = 'Link video phải là liên kết HTTPS của YouTube hoặc Vimeo.';
         this.renderModalRegion();
         return;
       }
@@ -1609,7 +1774,7 @@
         if (videoUrl) media.push({ url: videoUrl, type: 'video' });
         if (media.length) payload.media = media.slice(0, MAX_MEDIA_FILES);
 
-        await fetchJSON(`${this.apiUrl}/api/public/reviews/${this.productId}`, this.storeDomain, {
+        await fetchJSON(`${this.apiUrl}/api/public/reviews/${encodeURIComponent(this.productId)}`, this.storeDomain, {
           method: 'POST',
           body: payload,
         });
@@ -1625,9 +1790,7 @@
         window.setTimeout(() => this.closeForm(), 2500);
       } catch (error) {
         this.state.formSubmitting = false;
-        this.state.formError = error instanceof Error && error.message
-          ? error.message
-          : 'Gửi thất bại. Vui lòng thử lại sau.';
+        this.state.formError = publicErrorMessage(error, 'Gửi thất bại. Vui lòng thử lại sau.');
         this.renderModalRegion();
       }
     }
@@ -1640,17 +1803,12 @@
       for (let star = 5; star >= 1; star -= 1) {
         const count = Number(distribution[star] || 0);
         const percent = summary.count ? ((count / summary.count) * 100).toFixed(1) : 0;
-        bars += `<button type="button" class="f1genz-sapo-review-bar-row" data-filter-star="${star}" aria-label="Lọc ${star} sao">
-          <span class="f1genz-sapo-review-bar-row__label">${star}<span style="color:var(--f1genz-sapo-review-star-color)">${renderStar(this.config, true, 11)}</span></span>
-          <span class="f1genz-sapo-review-bar-row__track"><span class="f1genz-sapo-review-bar-row__fill" style="width:${percent}%"></span></span>
-          <span class="f1genz-sapo-review-bar-row__count">${count}</span>
-        </button>`;
+        bars += `<button type="button" class="f1genz-sapo-review-bar-row" data-filter-star="${star}" aria-label="Lọc ${star} sao"><span class="f1genz-sapo-review-bar-row__label">${star}<span style="color:var(--f1genz-sapo-review-star-color)">${renderStar(this.config, true, 11)}</span></span><span class="f1genz-sapo-review-bar-row__track"><span class="f1genz-sapo-review-bar-row__fill" style="width:${percent}%"></span></span><span class="f1genz-sapo-review-bar-row__count">${count}</span></button>`;
       }
 
       let filters = '';
       if (this.config.showFilter) {
-        filters += `<div class="f1genz-sapo-review-controls__filters">
-          <button class="f1genz-sapo-review-pill ${showAll ? 'f1genz-sapo-review-pill--active' : ''}" data-filter-star="0" data-filter-media="0">Tất cả</button>`;
+        filters += `<div class="f1genz-sapo-review-controls__filters"><button class="f1genz-sapo-review-pill ${showAll ? 'f1genz-sapo-review-pill--active' : ''}" data-filter-star="0" data-filter-media="0">Tất cả</button>`;
         for (let star = 5; star >= 1; star -= 1) {
           filters += `<button class="f1genz-sapo-review-pill ${this.state.filterStar === star ? 'f1genz-sapo-review-pill--active' : ''}" data-filter-star="${star}">
             ${star}<span style="color:${this.state.filterStar === star ? '#fff' : 'var(--f1genz-sapo-review-star-color)'}">${renderStar(this.config, true, 11)}</span> (${Number(distribution[star] || 0)})
@@ -1662,25 +1820,13 @@
       const writeAction = this.renderWriteAction();
       return `<div class="f1genz-sapo-review-section">
         ${this.config.showTitle ? `<h2 class="f1genz-sapo-review-title">${escapeHTML(this.config.titleText)} (${Number(summary.count || 0)})</h2>` : ''}
-        <div class="f1genz-sapo-review-summary">
-          <div class="f1genz-sapo-review-summary__score">
-            <span class="f1genz-sapo-review-summary__avg">${Number(summary.avg || 0).toFixed(1)}</span>
-            <div class="f1genz-sapo-review-summary__stars">${renderStars(this.config, summary.avg || 0, 16)}</div>
-            <span class="f1genz-sapo-review-summary__count">${Number(summary.count || 0)} đánh giá</span>
-          </div>
-          <div class="f1genz-sapo-review-summary__bars">${bars}</div>
-        </div>
-      </div>
-      <div class="f1genz-sapo-review-controls">
+        <div class="f1genz-sapo-review-summary"><div class="f1genz-sapo-review-summary__score"><span class="f1genz-sapo-review-summary__avg">${Number(summary.avg || 0).toFixed(1)}</span><div class="f1genz-sapo-review-summary__stars">${renderStars(this.config, summary.avg || 0, 16)}</div><span class="f1genz-sapo-review-summary__count">${Number(summary.count || 0)} đánh giá</span></div><div class="f1genz-sapo-review-summary__bars">${bars}</div></div>
+      </div><div class="f1genz-sapo-review-controls">
         ${filters}
         <div class="f1genz-sapo-review-controls__actions">
-          ${this.config.showSort ? `<select class="f1genz-sapo-review-select" data-action="sort">
-            <option value="newest" ${this.state.sortBy === 'newest' ? 'selected' : ''}>Mới nhất</option>
-            <option value="oldest" ${this.state.sortBy === 'oldest' ? 'selected' : ''}>Cũ nhất</option>
-          </select>` : ''}
+          ${this.config.showSort ? `<select class="f1genz-sapo-review-select" data-action="sort" aria-label="Sắp xếp đánh giá"><option value="newest" ${this.state.sortBy === 'newest' ? 'selected' : ''}>Mới nhất</option><option value="oldest" ${this.state.sortBy === 'oldest' ? 'selected' : ''}>Cũ nhất</option></select>` : ''}
           ${writeAction}
-        </div>
-      </div>`;
+        </div></div>`;
     }
 
     renderReviewList() {
@@ -1700,36 +1846,18 @@
       const useMasonry = this.config.reviewLayout === 'masonry';
       const renderReviewCard = (review, reviewIndex) => {
         const media = this.getReviewMedia(review);
-        const showEmail = this.config.emailDisplay !== 'hidden' && review.email;
-        const showPhone = this.config.phoneDisplay !== 'hidden' && review.phone;
         const reviewKey = getReviewKey(review, startIndex + reviewIndex);
         const showContentToggle = (useGrid || useMasonry) && review.content;
-        return `<article class="f1genz-sapo-review-card" data-review-key="${escapeHTML(reviewKey)}">
-          <div class="f1genz-sapo-review-card__main">
-            <div class="f1genz-sapo-review-card__top">
-              <div class="f1genz-sapo-review-card__avatar" style="background:${avatarColor(review.author)}">${escapeHTML(initials(review.author))}</div>
-              <div class="f1genz-sapo-review-card__meta">
-                <div class="f1genz-sapo-review-card__name-row">
-                  <span class="f1genz-sapo-review-card__author">${escapeHTML(review.author)}</span>
+        return `<article class="f1genz-sapo-review-card" data-review-key="${escapeHTML(reviewKey)}"><div class="f1genz-sapo-review-card__main"><div class="f1genz-sapo-review-card__top"><div class="f1genz-sapo-review-card__avatar" style="background:${avatarColor(review.author)}">${escapeHTML(initials(review.author))}</div><div class="f1genz-sapo-review-card__meta"><div class="f1genz-sapo-review-card__name-row"><span class="f1genz-sapo-review-card__author">${escapeHTML(review.author)}</span>
                   ${(this.config.showVerified && (this.config.showVerifiedAll || review.verified)) ? '<span class="f1genz-sapo-review-card__verified">Đã mua hàng</span>' : ''}
                   ${this.config.showDate ? `<span class="f1genz-sapo-review-card__date">${escapeHTML(timeAgo(review.created_at))}</span>` : ''}
-                </div>
-                <div class="f1genz-sapo-review-card__stars">${renderStars(this.config, review.rating, 14)}</div>
-              </div>
-            </div>
-            ${(showEmail || showPhone) ? `<div class="f1genz-sapo-review-card__contact">
-              ${showEmail ? `<span class="f1genz-sapo-review-card__contact-item">${renderContactIcon('user')}${escapeHTML(this.config.emailDisplay === 'mask' ? maskValue(review.email, 'email') : review.email)}</span>` : ''}
-              ${showPhone ? `<span class="f1genz-sapo-review-card__contact-item">${renderContactIcon('phone')}${escapeHTML(this.config.phoneDisplay === 'mask' ? maskValue(review.phone, 'phone') : review.phone)}</span>` : ''}
-            </div>` : ''}
+                </div><div class="f1genz-sapo-review-card__stars">${renderStars(this.config, review.rating, 14)}</div></div></div>
             ${(this.config.showTitle && review.title) ? `<div class="f1genz-sapo-review-card__title">${escapeHTML(review.title)}</div>` : ''}
             ${review.content ? `<div class="f1genz-sapo-review-card__content">${escapeHTML(review.content).replace(/\n/g, '<br>')}</div>` : ''}
             ${showContentToggle ? `<button type="button" class="f1genz-sapo-review-card__toggle" data-action="open-review-detail" data-review-key="${escapeHTML(reviewKey)}" aria-haspopup="dialog" hidden>Xem thêm</button>` : ''}
           </div>
           ${((this.config.allowReply && review.reply) || media.length) ? `<div class="f1genz-sapo-review-card__footer">
-            ${(this.config.allowReply && review.reply) ? `<div class="f1genz-sapo-review-card__reply">
-              <div class="f1genz-sapo-review-card__reply-badge">${escapeHTML(this.config.replyBadgeText || 'Phản hồi từ Shop')}</div>
-              <div class="f1genz-sapo-review-card__reply-content">${escapeHTML(review.reply)}</div>
-            </div>` : ''}
+            ${(this.config.allowReply && review.reply) ? `<div class="f1genz-sapo-review-card__reply"><div class="f1genz-sapo-review-card__reply-badge">${escapeHTML(this.config.replyBadgeText || 'Phản hồi từ Shop')}</div><div class="f1genz-sapo-review-card__reply-content">${formatSafeRichText(review.reply)}</div></div>` : ''}
             ${media.length ? `<div class="f1genz-sapo-review-card__media">
               ${media.map((item, mediaIndex) => `<button type="button" class="f1genz-sapo-review-card__media-item" data-action="open-media" data-review-index="${reviewIndex}" data-media-index="${mediaIndex}" aria-label="Mở ${item.type === 'video' ? 'video' : 'ảnh'} đánh giá ${mediaIndex + 1}">
                 ${item.type === 'video' ? `<video src="${escapeHTML(item.src)}" muted playsinline></video>` : `<img src="${escapeHTML(item.src)}" loading="lazy" decoding="async" alt="">`}
@@ -1773,58 +1901,26 @@
       const review = this.getReviewByKey(this.state.reviewDetailKey);
       if (!review) return '';
       const media = this.getReviewMedia(review);
-      const showEmail = this.config.emailDisplay !== 'hidden' && review.email;
-      const showPhone = this.config.phoneDisplay !== 'hidden' && review.phone;
-      return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-detail">
-        <div class="f1genz-sapo-review-modal-box f1genz-sapo-review-detail-modal" role="dialog" aria-modal="true" aria-labelledby="${this._reviewDetailTitleId}">
-          <div class="f1genz-sapo-review-modal-header">
-            <h3 class="f1genz-sapo-review-modal-title" id="${this._reviewDetailTitleId}">Chi tiết đánh giá</h3>
-            <button type="button" class="f1genz-sapo-review-modal-close" data-action="close-review-detail" aria-label="Đóng">✕</button>
-          </div>
-          <div class="f1genz-sapo-review-modal-body">
-            <div class="f1genz-sapo-review-detail">
-              <div class="f1genz-sapo-review-detail__top">
-                <div class="f1genz-sapo-review-card__avatar" style="background:${avatarColor(review.author)}">${escapeHTML(initials(review.author))}</div>
-                <div class="f1genz-sapo-review-card__meta">
-                  <div class="f1genz-sapo-review-card__name-row">
-                    <span class="f1genz-sapo-review-card__author">${escapeHTML(review.author)}</span>
+      return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-detail"><div class="f1genz-sapo-review-modal-box f1genz-sapo-review-detail-modal" role="dialog" aria-modal="true" aria-labelledby="${this._reviewDetailTitleId}"><div class="f1genz-sapo-review-modal-header"><h3 class="f1genz-sapo-review-modal-title" id="${this._reviewDetailTitleId}">Chi tiết đánh giá</h3><button type="button" class="f1genz-sapo-review-modal-close" data-action="close-review-detail" aria-label="Đóng">✕</button></div><div class="f1genz-sapo-review-modal-body"><div class="f1genz-sapo-review-detail"><div class="f1genz-sapo-review-detail__top"><div class="f1genz-sapo-review-card__avatar" style="background:${avatarColor(review.author)}">${escapeHTML(initials(review.author))}</div><div class="f1genz-sapo-review-card__meta"><div class="f1genz-sapo-review-card__name-row"><span class="f1genz-sapo-review-card__author">${escapeHTML(review.author)}</span>
                     ${(this.config.showVerified && (this.config.showVerifiedAll || review.verified)) ? '<span class="f1genz-sapo-review-card__verified">Đã mua hàng</span>' : ''}
                     ${this.config.showDate ? `<span class="f1genz-sapo-review-card__date">${escapeHTML(timeAgo(review.created_at))}</span>` : ''}
-                  </div>
-                  <div class="f1genz-sapo-review-card__stars">${renderStars(this.config, review.rating, 14)}</div>
-                  ${(showEmail || showPhone) ? `<div class="f1genz-sapo-review-card__contact">
-                    ${showEmail ? `<span class="f1genz-sapo-review-card__contact-item">${renderContactIcon('user')}${escapeHTML(this.config.emailDisplay === 'mask' ? maskValue(review.email, 'email') : review.email)}</span>` : ''}
-                    ${showPhone ? `<span class="f1genz-sapo-review-card__contact-item">${renderContactIcon('phone')}${escapeHTML(this.config.phoneDisplay === 'mask' ? maskValue(review.phone, 'phone') : review.phone)}</span>` : ''}
-                  </div>` : ''}
-                </div>
-              </div>
+                  </div><div class="f1genz-sapo-review-card__stars">${renderStars(this.config, review.rating, 14)}</div>
+                </div></div>
               ${(this.config.showTitle && review.title) ? `<div class="f1genz-sapo-review-detail__title">${escapeHTML(review.title)}</div>` : ''}
               ${review.content ? `<div class="f1genz-sapo-review-detail__content">${escapeHTML(review.content).replace(/\n/g, '<br>')}</div>` : ''}
-              ${(this.config.allowReply && review.reply) ? `<div class="f1genz-sapo-review-card__reply">
-                <div class="f1genz-sapo-review-card__reply-badge">${escapeHTML(this.config.replyBadgeText || 'Phản hồi từ Shop')}</div>
-                <div class="f1genz-sapo-review-card__reply-content">${escapeHTML(review.reply)}</div>
-              </div>` : ''}
+              ${(this.config.allowReply && review.reply) ? `<div class="f1genz-sapo-review-card__reply"><div class="f1genz-sapo-review-card__reply-badge">${escapeHTML(this.config.replyBadgeText || 'Phản hồi từ Shop')}</div><div class="f1genz-sapo-review-card__reply-content">${formatSafeRichText(review.reply)}</div></div>` : ''}
               ${media.length ? `<div class="f1genz-sapo-review-card__media">
                 ${media.map((item, mediaIndex) => `<button type="button" class="f1genz-sapo-review-card__media-item" data-action="open-review-detail-media" data-media-index="${mediaIndex}" aria-label="Mở ${item.type === 'video' ? 'video' : 'ảnh'} đánh giá ${mediaIndex + 1}">
                   ${item.type === 'video' ? `<video src="${escapeHTML(item.src)}" muted playsinline></video>` : `<img src="${escapeHTML(item.src)}" loading="lazy" decoding="async" alt="">`}
                 </button>`).join('')}
               </div>` : ''}
-            </div>
-          </div>
-        </div>
-      </div>`;
+            </div></div></div></div>`;
     }
 
     renderFormModal() {
       if (!this.state.formOpen) return '';
       if (this.state.formSuccess) {
-        return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-form">
-          <div class="f1genz-sapo-review-modal-box">
-            <div class="f1genz-sapo-review-modal-body">
-              <div class="f1genz-sapo-review-placeholder" role="status">${escapeHTML(this.state.formSuccess)}</div>
-            </div>
-          </div>
-        </div>`;
+        return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-form"><div class="f1genz-sapo-review-modal-box"><div class="f1genz-sapo-review-modal-body"><div class="f1genz-sapo-review-placeholder" role="status">${escapeHTML(this.state.formSuccess)}</div></div></div></div>`;
       }
 
       const accept = [];
@@ -1834,70 +1930,27 @@
       const formEmailMode = getFormEmailMode(this.config);
       const formPhoneMode = getFormPhoneMode(this.config);
 
-      return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-form">
-        <div class="f1genz-sapo-review-modal-box" role="dialog" aria-modal="true" aria-labelledby="${this._formTitleId}">
-          <div class="f1genz-sapo-review-modal-header">
-            <h3 class="f1genz-sapo-review-modal-title" id="${this._formTitleId}">Viết đánh giá</h3>
-            <button type="button" class="f1genz-sapo-review-modal-close" data-action="close-form" aria-label="Đóng">✕</button>
-          </div>
-          <div class="f1genz-sapo-review-modal-body">
+      return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-form"><div class="f1genz-sapo-review-modal-box" role="dialog" aria-modal="true" aria-labelledby="${this._formTitleId}"><div class="f1genz-sapo-review-modal-header"><h3 class="f1genz-sapo-review-modal-title" id="${this._formTitleId}">Viết đánh giá</h3><button type="button" class="f1genz-sapo-review-modal-close" data-action="close-form" aria-label="Đóng">✕</button></div><div class="f1genz-sapo-review-modal-body">
             ${this.state.formError ? `<div class="f1genz-sapo-review-alert" role="alert">${escapeHTML(this.state.formError)}</div>` : ''}
-            <div class="f1genz-sapo-review-form-group">
-              <label class="f1genz-sapo-review-form-label">Điểm số *</label>
-              <div class="f1genz-sapo-review-modal-stars">
+            <div class="f1genz-sapo-review-form-group"><label class="f1genz-sapo-review-form-label">Điểm số *</label><div class="f1genz-sapo-review-modal-stars">
                 ${[1, 2, 3, 4, 5].map((rating) => `<button type="button" class="f1genz-sapo-review-modal-star" data-action="set-rating" data-rating="${rating}" aria-label="${rating} sao">${renderStar(this.config, rating <= this.state.formRating, 32)}</button>`).join('')}
-              </div>
+              </div></div>
+            ${this.config.formTitleMode !== 'hidden' ? `<div class="f1genz-sapo-review-form-group"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-title">Tiêu đề${this.config.formTitleMode === 'required' ? ' *' : ''}</label><input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-title" name="title" maxlength="100" placeholder="Tóm tắt đánh giá…" value="${escapeHTML(draft.title)}"></div>` : ''}
+            ${getFormContentMode(this.config) !== 'hidden' ? `<div class="f1genz-sapo-review-form-group"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-content">Nội dung${getFormContentMode(this.config) === 'required' ? ' *' : ''}</label><textarea class="f1genz-sapo-review-textarea" id="f1genz-sapo-review-input-content" name="content" maxlength="2000" placeholder="Chia sẻ cảm nhận của bạn về sản phẩm này…">${escapeHTML(draft.content)}</textarea></div>` : ''}
+            <div class="f1genz-sapo-review-modal-row"><div class="f1genz-sapo-review-form-group" style="flex:1"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-author">Họ Tên *</label><input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-author" name="author" autocomplete="name" maxlength="100" placeholder="Nguyễn Văn A" value="${escapeHTML(draft.author)}"></div>
+              ${formEmailMode !== 'hidden' ? `<div class="f1genz-sapo-review-form-group" style="flex:1"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-email">Email${formEmailMode === 'required' ? ' *' : ''}</label><input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-email" name="email" autocomplete="email" spellcheck="false" maxlength="200" type="email" placeholder="email@gmail.com" value="${escapeHTML(draft.email)}"></div>` : ''}
             </div>
-            ${this.config.formTitleMode !== 'hidden' ? `<div class="f1genz-sapo-review-form-group">
-              <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-title">Tiêu đề${this.config.formTitleMode === 'required' ? ' *' : ''}</label>
-              <input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-title" name="title" maxlength="100" placeholder="Tóm tắt đánh giá…" value="${escapeHTML(draft.title)}">
-            </div>` : ''}
-            ${getFormContentMode(this.config) !== 'hidden' ? `<div class="f1genz-sapo-review-form-group">
-              <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-content">Nội dung${getFormContentMode(this.config) === 'required' ? ' *' : ''}</label>
-              <textarea class="f1genz-sapo-review-textarea" id="f1genz-sapo-review-input-content" name="content" maxlength="2000" placeholder="Chia sẻ cảm nhận của bạn về sản phẩm này…">${escapeHTML(draft.content)}</textarea>
-            </div>` : ''}
-            <div class="f1genz-sapo-review-modal-row">
-              <div class="f1genz-sapo-review-form-group" style="flex:1">
-                <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-author">Họ Tên *</label>
-                <input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-author" name="author" autocomplete="name" maxlength="100" placeholder="Nguyễn Văn A" value="${escapeHTML(draft.author)}">
-              </div>
-              ${formEmailMode !== 'hidden' ? `<div class="f1genz-sapo-review-form-group" style="flex:1">
-                <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-email">Email${formEmailMode === 'required' ? ' *' : ''}</label>
-                <input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-email" name="email" autocomplete="email" spellcheck="false" maxlength="200" type="email" placeholder="email@gmail.com" value="${escapeHTML(draft.email)}">
-              </div>` : ''}
-            </div>
-            ${formPhoneMode !== 'hidden' ? `<div class="f1genz-sapo-review-form-group">
-              <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-phone">Số điện thoại${formPhoneMode === 'required' ? ' *' : ''}</label>
-              <input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-phone" name="phone" autocomplete="tel" inputmode="tel" maxlength="20" placeholder="0987123456" value="${escapeHTML(draft.phone)}">
-            </div>` : ''}
+            ${formPhoneMode !== 'hidden' ? `<div class="f1genz-sapo-review-form-group"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-phone">Số điện thoại${formPhoneMode === 'required' ? ' *' : ''}</label><input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-phone" name="phone" autocomplete="tel" inputmode="tel" maxlength="20" placeholder="0987123456" value="${escapeHTML(draft.phone)}"></div>` : ''}
             ${requiresPurchaseIdentity(this.config) ? `<div class="f1genz-sapo-review-form-hint">Ch\u1ec9 kh\u00e1ch \u0111\u00e3 mua s\u1ea3n ph\u1ea9m m\u1edbi c\u00f3 th\u1ec3 g\u1eedi \u0111\u00e1nh gi\u00e1. App s\u1ebd x\u00e1c minh b\u1eb1ng Email ho\u1eb7c S\u1ed1 \u0111i\u1ec7n tho\u1ea1i.</div>` : ''}
-            ${this.config.allowVideo ? `<div class="f1genz-sapo-review-form-group f1genz-sapo-review-video-link">
-              <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-video-url">Link YouTube/Vimeo</label>
-              <input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-video-url" name="videoUrl" inputmode="url" spellcheck="false" maxlength="2000" placeholder="https://youtube.com/watch?v=... hoặc https://vimeo.com/..." value="${escapeHTML(draft.videoUrl)}">
-              <div class="f1genz-sapo-review-form-hint">Dán link HTTPS nếu không upload video file.</div>
-            </div>` : ''}
-            ${(this.config.allowImage || this.config.allowVideo) ? `<div class="f1genz-sapo-review-form-group">
-              <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-media">Đính kèm ${this.config.allowImage && this.config.allowVideo ? 'Ảnh/Video' : this.config.allowImage ? 'Ảnh' : 'Video'}</label>
-              <div class="f1genz-sapo-review-form-hint">Tối đa 5 tệp. Ảnh tối đa 500KB, video tối đa 2MB.</div>
-              <div class="f1genz-sapo-review-file-wrap">
-                <input id="f1genz-sapo-review-input-media" type="file" multiple accept="${accept.join(',')}" hidden>
-                <button type="button" class="f1genz-sapo-review-btn--outline" data-action="trigger-file">Chọn tệp…</button>
-                <span class="f1genz-sapo-review-file-note">${this.state.formFiles.length ? `${this.state.formFiles.length} tệp đã chọn` : 'Chưa chọn tệp nào'}</span>
-              </div>
+            ${this.config.allowVideo ? `<div class="f1genz-sapo-review-form-group f1genz-sapo-review-video-link"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-video-url">Link YouTube/Vimeo</label><input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-video-url" name="videoUrl" inputmode="url" spellcheck="false" maxlength="2000" placeholder="https://youtube.com/watch?v=... hoặc https://vimeo.com/..." value="${escapeHTML(draft.videoUrl)}"><div class="f1genz-sapo-review-form-hint">Dán link HTTPS nếu không upload video file.</div></div>` : ''}
+            ${(this.config.allowImage || this.config.allowVideo) ? `<div class="f1genz-sapo-review-form-group"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-media">Đính kèm ${this.config.allowImage && this.config.allowVideo ? 'Ảnh/Video' : this.config.allowImage ? 'Ảnh' : 'Video'}</label><div class="f1genz-sapo-review-form-hint">Tối đa 5 tệp. Ảnh tối đa 5MB (tự nén khi cần), video tối đa 2MB.</div><div class="f1genz-sapo-review-file-wrap"><input id="f1genz-sapo-review-input-media" class="f1genz-sapo-review-file-input" type="file" multiple accept="${accept.join(',')}" hidden tabindex="-1" aria-hidden="true" style="display:none!important;position:absolute;width:0;height:0;opacity:0;pointer-events:none"><label for="f1genz-sapo-review-input-media" class="f1genz-sapo-review-btn--outline f1genz-sapo-review-file-trigger">Chọn tệp…</label><span class="f1genz-sapo-review-file-note">${this.state.formFiles.length ? `${this.state.formFiles.length} tệp đã chọn` : 'Chưa chọn tệp nào'}</span></div>
               ${this.state.formFiles.length ? `<div class="f1genz-sapo-review-file-preview">
                 ${this.state.formFiles.map((file, index) => `<div class="f1genz-sapo-review-file-thumb">
                   ${file.type.startsWith('video/') ? `<video src="${this.previewUrls[index] || ''}" muted></video>` : `<img src="${this.previewUrls[index] || ''}" alt="${escapeHTML(file.name)}" decoding="async">`}
-                  <button type="button" class="f1genz-sapo-review-file-remove" data-action="remove-file" data-index="${index}" aria-label="Xóa tệp ${index + 1}">✕</button>
-                </div>`).join('')}
+                  <button type="button" class="f1genz-sapo-review-file-remove" data-action="remove-file" data-index="${index}" aria-label="Xóa tệp ${index + 1}">✕</button></div>`).join('')}
               </div>` : ''}
             </div>` : ''}
-          </div>
-          <div class="f1genz-sapo-review-modal-footer">
-            <button type="button" class="f1genz-sapo-review-btn" data-action="submit-form" ${this.state.formSubmitting ? 'disabled' : ''}>${this.state.formSubmitting ? 'Đang gửi…' : 'Gửi đánh giá'}</button>
-            <button type="button" class="f1genz-sapo-review-btn f1genz-sapo-review-btn--outline" data-action="close-form" ${this.state.formSubmitting ? 'disabled' : ''}>Hủy</button>
-          </div>
-        </div>
-      </div>`;
+          </div><div class="f1genz-sapo-review-modal-footer"><button type="button" class="f1genz-sapo-review-btn" data-action="submit-form" ${this.state.formSubmitting ? 'disabled' : ''}>${this.state.formSubmitting ? 'Đang gửi…' : 'Gửi đánh giá'}</button><button type="button" class="f1genz-sapo-review-btn f1genz-sapo-review-btn--outline" data-action="close-form" ${this.state.formSubmitting ? 'disabled' : ''}>Hủy</button></div></div></div>`;
     }
 
     renderLightbox() {
@@ -1908,16 +1961,13 @@
         ? `<iframe src="${escapeHTML(videoEmbedUrl)}" title="Video đánh giá" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`
         : isDirectVideoUrl(item.src)
           ? `<video src="${escapeHTML(item.src)}" controls preload="metadata" playsinline></video>`
-          : `<a class="f1genz-sapo-review-btn" href="${escapeHTML(item.src)}" target="_blank" rel="noopener noreferrer">Mở video</a>`;
-      return `<div class="f1genz-sapo-review-lightbox" data-action="close-lightbox" data-kind="f1genz-sapo-review-lightbox">
-        <div class="f1genz-sapo-review-lightbox__inner">
-          <button type="button" class="f1genz-sapo-review-lightbox__close" data-action="close-lightbox" aria-label="Đóng">✕</button>
+          : `<a class="f1genz-sapo-review-btn" href="${escapeHTML(item.src)}" target="_blank" rel="nofollow ugc noopener noreferrer">Mở video</a>`;
+      return `<div class="f1genz-sapo-review-lightbox" data-action="close-lightbox" data-kind="f1genz-sapo-review-lightbox"><div class="f1genz-sapo-review-lightbox__inner"><button type="button" class="f1genz-sapo-review-lightbox__close" data-action="close-lightbox" aria-label="Đóng">✕</button>
           ${this.state.lightboxItems.length > 1 ? '<button type="button" class="f1genz-sapo-review-lightbox__nav f1genz-sapo-review-lightbox__prev" data-action="prev-lightbox" aria-label="Ảnh trước">‹</button>' : ''}
           ${item.type === 'video' ? videoMarkup : `<img src="${escapeHTML(item.src)}" decoding="async" alt="">`}
           ${this.state.lightboxItems.length > 1 ? '<button type="button" class="f1genz-sapo-review-lightbox__nav f1genz-sapo-review-lightbox__next" data-action="next-lightbox" aria-label="Ảnh sau">›</button>' : ''}
           ${this.state.lightboxItems.length > 1 ? `<div class="f1genz-sapo-review-lightbox__caption">${this.state.lightboxIndex + 1} / ${this.state.lightboxItems.length}</div>` : ''}
-        </div>
-      </div>`;
+        </div></div>`;
     }
 
     render() {
@@ -2031,10 +2081,6 @@
     }
 
     async openForm() {
-      if (this.config.requireLogin || requiresPurchaseIdentity(this.config)) {
-        const session = await checkCustomerSession({ force: true });
-        this.applyCustomerSession(session);
-      }
       if (this.shouldRequireLogin) {
         window.location.href = ACCOUNT_LOGIN_URL;
         return;
@@ -2122,7 +2168,7 @@
       try {
         const payload = { author, question };
         if (email) payload.email = email;
-        await fetchJSON(`${this.apiUrl}/api/public/qna/${this.productId}`, this.storeDomain, {
+        await fetchJSON(`${this.apiUrl}/api/public/qna/${encodeURIComponent(this.productId)}`, this.storeDomain, {
           method: 'POST',
           body: payload,
         });
@@ -2135,9 +2181,7 @@
         window.setTimeout(() => this.closeForm(), 2500);
       } catch (error) {
         this.state.formSubmitting = false;
-        this.state.formError = error instanceof Error && error.message
-          ? error.message
-          : 'Gửi thất bại. Vui lòng thử lại sau.';
+        this.state.formError = publicErrorMessage(error, 'Gửi thất bại. Vui lòng thử lại sau.');
         this.render();
       }
     }
@@ -2157,19 +2201,10 @@
       let markup = grid ? '<div class="f1genz-sapo-review-qna-grid">' : '';
 
       visible.forEach((question) => {
-        markup += `<article class="f1genz-sapo-review-qna-card">
-          <div class="f1genz-sapo-review-qna-card__top">
-            <div class="f1genz-sapo-review-qna-card__avatar" style="background:${avatarColor(question.author)}">${escapeHTML(initials(question.author))}</div>
-            <div class="f1genz-sapo-review-qna-card__meta">
-              <span class="f1genz-sapo-review-qna-card__author">${escapeHTML(question.author)}</span>
+        markup += `<article class="f1genz-sapo-review-qna-card"><div class="f1genz-sapo-review-qna-card__top"><div class="f1genz-sapo-review-qna-card__avatar" style="background:${avatarColor(question.author)}">${escapeHTML(initials(question.author))}</div><div class="f1genz-sapo-review-qna-card__meta"><span class="f1genz-sapo-review-qna-card__author">${escapeHTML(question.author)}</span>
               ${this.config.showDate ? `<span class="f1genz-sapo-review-qna-card__date">${escapeHTML(timeAgo(question.created_at))}</span>` : ''}
-              <div class="f1genz-sapo-review-qna-card__question">${escapeHTML(question.question)}</div>
-            </div>
-          </div>
-          ${question.answer ? `<div class="f1genz-sapo-review-qna-card__answer">
-            <div class="f1genz-sapo-review-qna-card__answer-badge">${escapeHTML(question.answered_by || 'Shop')} trả lời</div>
-            <div class="f1genz-sapo-review-qna-card__answer-text">${escapeHTML(question.answer)}</div>
-          </div>` : '<div class="f1genz-sapo-review-qna-card__pending">Đang chờ trả lời…</div>'}
+              <div class="f1genz-sapo-review-qna-card__question">${escapeHTML(question.question)}</div></div></div>
+          ${question.answer ? `<div class="f1genz-sapo-review-qna-card__answer"><div class="f1genz-sapo-review-qna-card__answer-badge">${escapeHTML(question.answered_by || 'Shop')} trả lời</div><div class="f1genz-sapo-review-qna-card__answer-text">${formatSafeRichText(question.answer)}</div></div>` : '<div class="f1genz-sapo-review-qna-card__pending">Đang chờ trả lời…</div>'}
         </article>`;
       });
 
@@ -2181,46 +2216,14 @@
     renderFormModal() {
       if (!this.state.formOpen) return '';
       if (this.state.formSuccess) {
-        return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-qna-form">
-          <div class="f1genz-sapo-review-modal-box">
-            <div class="f1genz-sapo-review-modal-body">
-              <div class="f1genz-sapo-review-placeholder" role="status">${escapeHTML(this.state.formSuccess)}</div>
-            </div>
-          </div>
-        </div>`;
+        return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-qna-form"><div class="f1genz-sapo-review-modal-box"><div class="f1genz-sapo-review-modal-body"><div class="f1genz-sapo-review-placeholder" role="status">${escapeHTML(this.state.formSuccess)}</div></div></div></div>`;
       }
 
       const draft = this.state.formDraft;
 
-      return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-qna-form">
-        <div class="f1genz-sapo-review-modal-box" role="dialog" aria-modal="true" aria-labelledby="${this._formTitleId}">
-          <div class="f1genz-sapo-review-modal-header">
-            <h3 class="f1genz-sapo-review-modal-title" id="${this._formTitleId}">Đặt câu hỏi</h3>
-            <button type="button" class="f1genz-sapo-review-modal-close" data-action="close-form" aria-label="Đóng">✕</button>
-          </div>
-          <div class="f1genz-sapo-review-modal-body">
+      return `<div class="f1genz-sapo-review-modal-overlay" data-kind="f1genz-sapo-review-qna-form"><div class="f1genz-sapo-review-modal-box" role="dialog" aria-modal="true" aria-labelledby="${this._formTitleId}"><div class="f1genz-sapo-review-modal-header"><h3 class="f1genz-sapo-review-modal-title" id="${this._formTitleId}">Đặt câu hỏi</h3><button type="button" class="f1genz-sapo-review-modal-close" data-action="close-form" aria-label="Đóng">✕</button></div><div class="f1genz-sapo-review-modal-body">
             ${this.state.formError ? `<div class="f1genz-sapo-review-alert" role="alert">${escapeHTML(this.state.formError)}</div>` : ''}
-            <div class="f1genz-sapo-review-modal-row">
-              <div class="f1genz-sapo-review-form-group" style="flex:1">
-                <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-author">Họ Tên *</label>
-                <input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-author" name="author" autocomplete="name" maxlength="100" placeholder="Nguyễn Văn A" value="${escapeHTML(draft.author)}">
-              </div>
-              <div class="f1genz-sapo-review-form-group" style="flex:1">
-                <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-email">Email</label>
-                <input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-email" name="email" autocomplete="email" spellcheck="false" maxlength="200" type="email" placeholder="email@gmail.com" value="${escapeHTML(draft.email)}">
-              </div>
-            </div>
-            <div class="f1genz-sapo-review-form-group">
-              <label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-question">Câu hỏi *</label>
-              <textarea class="f1genz-sapo-review-textarea" id="f1genz-sapo-review-input-question" name="question" maxlength="1000" placeholder="Bạn muốn hỏi gì về sản phẩm này?">${escapeHTML(draft.question)}</textarea>
-            </div>
-          </div>
-          <div class="f1genz-sapo-review-modal-footer">
-            <button type="button" class="f1genz-sapo-review-btn" data-action="submit-form" ${this.state.formSubmitting ? 'disabled' : ''}>${this.state.formSubmitting ? 'Đang gửi…' : 'Gửi câu hỏi'}</button>
-            <button type="button" class="f1genz-sapo-review-btn f1genz-sapo-review-btn--outline" data-action="close-form" ${this.state.formSubmitting ? 'disabled' : ''}>Hủy</button>
-          </div>
-        </div>
-      </div>`;
+            <div class="f1genz-sapo-review-modal-row"><div class="f1genz-sapo-review-form-group" style="flex:1"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-author">Họ Tên *</label><input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-author" name="author" autocomplete="name" maxlength="100" placeholder="Nguyễn Văn A" value="${escapeHTML(draft.author)}"></div><div class="f1genz-sapo-review-form-group" style="flex:1"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-email">Email</label><input class="f1genz-sapo-review-input" id="f1genz-sapo-review-input-email" name="email" autocomplete="email" spellcheck="false" maxlength="200" type="email" placeholder="email@gmail.com" value="${escapeHTML(draft.email)}"></div></div><div class="f1genz-sapo-review-form-group"><label class="f1genz-sapo-review-form-label" for="f1genz-sapo-review-input-question">Câu hỏi *</label><textarea class="f1genz-sapo-review-textarea" id="f1genz-sapo-review-input-question" name="question" maxlength="1000" placeholder="Bạn muốn hỏi gì về sản phẩm này?">${escapeHTML(draft.question)}</textarea></div></div><div class="f1genz-sapo-review-modal-footer"><button type="button" class="f1genz-sapo-review-btn" data-action="submit-form" ${this.state.formSubmitting ? 'disabled' : ''}>${this.state.formSubmitting ? 'Đang gửi…' : 'Gửi câu hỏi'}</button><button type="button" class="f1genz-sapo-review-btn f1genz-sapo-review-btn--outline" data-action="close-form" ${this.state.formSubmitting ? 'disabled' : ''}>Hủy</button></div></div></div>`;
     }
 
     render() {
@@ -2235,13 +2238,9 @@
       const askAction = this.shouldRequireLogin
         ? `<a class="f1genz-sapo-review-btn--ask f1genz-sapo-review-btn--login" href="${ACCOUNT_LOGIN_URL}" title="Đăng nhập tại /account">Đăng nhập để đặt câu hỏi</a>`
         : `<button type="button" class="f1genz-sapo-review-btn--ask" data-action="open-form">Đặt câu hỏi</button>`;
-      this.renderTemplate(`<div class="f1genz-sapo-review-preview">
-          <div class="f1genz-sapo-review-qna-header">
-            <h3>Hỏi đáp (${Number(this.state.summary.total || 0)})</h3>
-            <div class="f1genz-sapo-review-qna-header__actions">
+      this.renderTemplate(`<div class="f1genz-sapo-review-preview"><div class="f1genz-sapo-review-qna-header"><h3>Hỏi đáp (${Number(this.state.summary.total || 0)})</h3><div class="f1genz-sapo-review-qna-header__actions">
               ${askAction}
-            </div>
-          </div>
+            </div></div>
           ${this.renderQuestions()}
           ${this.renderFormModal()}
         </div>`,
@@ -2251,42 +2250,67 @@
 
   class F1GRatingBadgeElement extends F1GBaseElement {
     static get observedAttributes() {
-      return ['avg-rating', 'review-count', 'storeDomain', 'product-id'];
+      return ['avg-rating', 'review-count', 'storedomain', 'product-id'];
     }
 
-    async initialize() {
+    constructor() {
+      super();
+      this._ratingReady = false;
+      this._summaryReloadVersion = 0;
+    }
+
+    readAttributeSummary() {
+      const attrAvg = this.getAttribute('avg-rating');
+      const attrCount = this.getAttribute('review-count');
+      if (attrAvg === null || attrCount === null) return null;
+      return {
+        avg: Number.parseFloat(attrAvg || '0') || 0,
+        count: Number.parseInt(attrCount || '0', 10) || 0,
+      };
+    }
+
+    connectedCallback() {
       this.style.display = 'inline-flex';
       this.style.alignItems = 'center';
       this.style.gap = '4px';
-      this.state.summary = null;
-      const attrAvg = this.getAttribute('avg-rating');
-      const attrCount = this.getAttribute('review-count');
-      if (attrAvg !== null && attrCount !== null) {
-        this.state.summary = {
-          avg: Number.parseFloat(attrAvg || '0') || 0,
-          count: Number.parseInt(attrCount || '0', 10) || 0,
-        };
+      const attributeSummary = this.readAttributeSummary();
+      if (attributeSummary) {
+        this.state.summary = attributeSummary;
         this.render();
-        return;
       }
-      await this.reloadData();
-      this.render();
+      this._ratingReady = true;
+      super.connectedCallback();
     }
 
-    attributeChangedCallback() {
-      if (this.isConnected) {
-        this.reloadData()
-          .then(() => this.render())
-          .catch(() => this.render());
+    async initialize() {
+      const attributeSummary = this.readAttributeSummary();
+      if (attributeSummary) this.state.summary = attributeSummary;
+      this.render();
+      await this.reloadData();
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+      if (!this.isConnected || !this._ratingReady || oldValue === newValue) return;
+      if (name === 'avg-rating' || name === 'review-count') {
+        const attributeSummary = this.readAttributeSummary();
+        if (attributeSummary) {
+          this.state.summary = attributeSummary;
+          this.render();
+        }
       }
+      this.reloadData();
     }
 
     async reloadData() {
       if (!this.productId || !this.storeDomain) return;
+      const version = ++this._summaryReloadVersion;
       try {
-        this.state.summary = await getReviewSummary(this.apiUrl, this.storeDomain, this.productId);
+        const summary = await getReviewSummary(this.apiUrl, this.storeDomain, this.productId);
+        if (version !== this._summaryReloadVersion) return;
+        this.state.summary = summary;
+        this.render();
       } catch {
-        this.state.summary = null;
+        if (version === this._summaryReloadVersion) this.render();
       }
     }
 
@@ -2306,10 +2330,7 @@
       }
 
       const isEmpty = reviewCount <= 0 || avgRating <= 0;
-      this.renderTemplate(`<span class="f1genz-sapo-review-rating-badge ${isEmpty ? 'f1genz-sapo-review-rating-badge--empty' : ''}">
-          <span class="f1genz-sapo-review-rating-badge__stars" role="img" aria-label="${escapeHTML(avgRating.toFixed(1))} trên 5 sao">${stars}</span>
-          <span class="f1genz-sapo-review-rating-badge__count">(${reviewCount} đánh giá)</span>
-        </span>`,
+      this.renderTemplate(`<span class="f1genz-sapo-review-rating-badge ${isEmpty ? 'f1genz-sapo-review-rating-badge--empty' : ''}"><span class="f1genz-sapo-review-rating-badge__stars" role="img" aria-label="${escapeHTML(avgRating.toFixed(1))} trên 5 sao">${stars}</span><span class="f1genz-sapo-review-rating-badge__count">(${reviewCount} đánh giá)</span></span>`,
       );
     }
   }
@@ -2409,6 +2430,14 @@
     return /^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(normalized) ? normalized : '';
   }
 
+  function absoluteSchemaUrl(value, origin) {
+    const normalized = String(value || '').trim();
+    if (!normalized) return '';
+    if (normalized.startsWith('//')) return `https:${normalized}`;
+    if (normalized.startsWith('/') && origin) return `${origin}${normalized}`;
+    return /^https?:\/\//i.test(normalized) ? normalized : '';
+  }
+
   function compactSchema(value) {
     if (Array.isArray(value)) {
       return value.map(compactSchema).filter((item) => item !== undefined);
@@ -2430,7 +2459,98 @@
     return value === null ? undefined : value;
   }
 
+  function readSchemaAttributes(element) {
+    return {
+      name: schemaAttribute(element, ['product-name', 'name']),
+      url: schemaAttribute(element, ['product-url', 'url']),
+      images: schemaAttribute(element, ['product-image', 'image', 'images']),
+      brand: schemaAttribute(element, ['brand', 'brand-name']),
+      price: schemaAttribute(element, ['price']),
+      currency: schemaAttribute(element, ['currency', 'price-currency'], 'VND'),
+      sku: schemaAttribute(element, ['sku']),
+      mpn: schemaAttribute(element, ['mpn']),
+      gtin: schemaAttribute(element, ['gtin', 'gtin13', 'gtin12', 'gtin8', 'barcode']),
+      description: schemaAttribute(element, ['description']),
+      availability: element.getAttribute('availability'),
+      maxReviews: element.getAttribute('max-reviews'),
+    };
+  }
+
+  function buildProductSchema(attrs, reviews, summary, page) {
+    const name = String(attrs.name || '').trim();
+    if (!name) return null;
+
+    const safeReviews = Array.isArray(reviews) ? reviews : [];
+    const stats = summary && typeof summary === 'object' ? summary : {};
+    const maxReviews = Math.max(0, Math.min(50, Number.parseInt(attrs.maxReviews || '20', 10) || 20));
+    const productUrl = absoluteSchemaUrl(attrs.url, page.origin) || page.href;
+    const canonicalUrl = absoluteSchemaUrl(page.canonicalHref, page.origin) || `${page.origin}${page.pathname}`;
+    const productNodeId = `${canonicalUrl.split('?')[0].split('#')[0]}#product`;
+    const images = schemaList(attrs.images)
+      .map((image) => absoluteSchemaUrl(image, page.origin))
+      .filter(Boolean);
+    const price = schemaPrice(attrs.price);
+    const currency = schemaIdentifier(attrs.currency || 'VND', 3).toUpperCase();
+    const brandName = schemaIdentifier(attrs.brand, 100);
+    const reviewCount = schemaInteger(stats.count);
+    const ratingValue = Number(stats.avg || 0);
+    const hasApprovedReviews = reviewCount > 0 && Number.isFinite(ratingValue) && ratingValue > 0;
+
+    return compactSchema({
+      '@context': 'https://schema.org/',
+      '@type': 'Product',
+      '@id': productNodeId,
+      name,
+      image: images.length ? images : undefined,
+      description: schemaIdentifier(attrs.description, 5000),
+      sku: schemaIdentifier(attrs.sku, 100),
+      mpn: schemaIdentifier(attrs.mpn, 100),
+      gtin: schemaGtin(attrs.gtin),
+      brand: brandName ? { '@type': 'Brand', name: brandName } : undefined,
+      offers: price
+        ? {
+            '@type': 'Offer',
+            url: productUrl,
+            priceCurrency: currency || 'VND',
+            price,
+            availability: schemaAvailability(attrs.availability),
+          }
+        : undefined,
+      aggregateRating: hasApprovedReviews
+        ? {
+            '@type': 'AggregateRating',
+            ratingValue: Math.round(Math.max(1, Math.min(5, ratingValue)) * 10) / 10,
+            reviewCount,
+            bestRating: 5,
+            worstRating: 1,
+          }
+        : undefined,
+      review: hasApprovedReviews && safeReviews.length > 0
+        ? safeReviews.slice(0, maxReviews).map((review) =>
+            compactSchema({
+              '@type': 'Review',
+              author: { '@type': 'Person', name: String(review.author || 'Customer').trim() },
+              datePublished: schemaDate(review.created_at),
+              reviewBody: String(review.content || review.title || '').trim(),
+              name: review.title ? String(review.title).trim() : undefined,
+              reviewRating: {
+                '@type': 'Rating',
+                ratingValue: Math.max(1, Math.min(5, Number(review.rating || 5))),
+                bestRating: 5,
+                worstRating: 1,
+              },
+            }),
+          )
+        : undefined,
+    });
+  }
+
   class F1GProductSchemaElement extends F1GBaseElement {
+    async bootstrap() {
+      if (!this.apiUrl || !this.storeDomain) return;
+      await this.initialize();
+    }
+
     async initialize() {
       if (!this.productId) {
         this.renderTemplate('');
@@ -2438,83 +2558,32 @@
       }
 
       try {
-        const reviews = await getPublicReviews(this.apiUrl, this.storeDomain, this.productId);
-        const summary = calculateReviewSummaryFromReviews(reviews);
-        this.renderSchema(Array.isArray(reviews) ? reviews : [], summary || {});
+        const [reviews, remoteSummary] = await Promise.all([
+          getPublicReviews(this.apiUrl, this.storeDomain, this.productId),
+          getReviewSummary(this.apiUrl, this.storeDomain, this.productId).catch(() => null),
+        ]);
+        const safeReviews = Array.isArray(reviews) ? reviews : [];
+        const summary = remoteSummary && typeof remoteSummary === 'object'
+          ? remoteSummary
+          : calculateReviewSummaryFromReviews(safeReviews);
+        this.renderSchema(safeReviews, summary);
       } catch {
         this.renderSchema([], {});
       }
     }
 
     renderSchema(reviews, summary) {
-      const name = schemaAttribute(this, ['product-name', 'name']);
-      if (!name) {
+      const canonicalLink = document.querySelector('link[rel="canonical"]');
+      const schema = buildProductSchema(readSchemaAttributes(this), reviews, summary, {
+        href: window.location.href,
+        origin: window.location.origin,
+        pathname: window.location.pathname,
+        canonicalHref: canonicalLink ? canonicalLink.getAttribute('href') : '',
+      });
+      if (!schema) {
         this.renderTemplate('');
         return;
       }
-
-      const maxReviews = Math.max(
-        0,
-        Math.min(50, Number.parseInt(this.getAttribute('max-reviews') || '20', 10) || 20),
-      );
-      const productUrl = schemaAttribute(this, ['product-url', 'url'], window.location.href);
-      const images = schemaList(schemaAttribute(this, ['product-image', 'image', 'images']));
-      const brandName = schemaIdentifier(schemaAttribute(this, ['brand', 'brand-name']), 100);
-      const price = schemaPrice(schemaAttribute(this, ['price']));
-      const currency = schemaIdentifier(schemaAttribute(this, ['currency', 'price-currency'], 'VND'), 3).toUpperCase();
-      const sku = schemaIdentifier(schemaAttribute(this, ['sku']), 100);
-      const mpn = schemaIdentifier(schemaAttribute(this, ['mpn']), 100);
-      const gtin = schemaGtin(schemaAttribute(this, ['gtin', 'gtin13', 'gtin12', 'gtin8', 'barcode']));
-      const reviewCount = schemaInteger(summary.count);
-      const ratingValue = Number(summary.avg || 0);
-
-      const schema = compactSchema({
-        '@context': 'https://schema.org/',
-        '@type': 'Product',
-        name,
-        image: images,
-        description: schemaIdentifier(schemaAttribute(this, ['description']), 5000),
-        sku,
-        mpn,
-        gtin,
-        brand: brandName ? { '@type': 'Brand', name: brandName } : undefined,
-        offers:
-          price || productUrl
-            ? {
-                '@type': 'Offer',
-                url: productUrl,
-                priceCurrency: currency || 'VND',
-                price: price || undefined,
-                availability: schemaAvailability(this.getAttribute('availability')),
-              }
-            : undefined,
-        aggregateRating:
-          reviewCount > 0 && Number.isFinite(ratingValue) && ratingValue > 0
-            ? {
-                '@type': 'AggregateRating',
-                ratingValue: Math.round(Math.max(1, Math.min(5, ratingValue)) * 10) / 10,
-                reviewCount,
-              }
-            : undefined,
-        review: reviews.slice(0, maxReviews).map((review) =>
-          compactSchema({
-            '@type': 'Review',
-            author: {
-              '@type': 'Person',
-              name: review.author || 'Customer',
-            },
-            datePublished: schemaDate(review.created_at),
-            reviewBody: review.content || review.title || '',
-            name: review.title || undefined,
-            reviewRating: {
-              '@type': 'Rating',
-              ratingValue: Math.max(1, Math.min(5, Number(review.rating || 5))),
-              bestRating: 5,
-              worstRating: 1,
-            },
-          }),
-        ),
-      });
 
       this.innerHTML = '';
       const script = document.createElement('script');
@@ -2638,9 +2707,7 @@
         const reviewsSelected = this.state.activeTab !== 'qna';
         this.state.activeTab = reviewsSelected ? 'reviews' : 'qna';
         const qnaPanel = reviewsSelected ? '' : this.getQnaPanelMarkup();
-        this.innerHTML = `<div class="f1genz-sapo-review-feedback-stack f1genz-sapo-review-feedback-stack--tabs">
-          <div class="f1genz-sapo-review-section-tabs" role="tablist" aria-label="Đánh giá và hỏi đáp">
-            <button
+        this.innerHTML = `<div class="f1genz-sapo-review-feedback-stack f1genz-sapo-review-feedback-stack--tabs"><div class="f1genz-sapo-review-section-tabs" role="tablist" aria-label="Đánh giá và hỏi đáp"><button
               type="button"
               id="${this._tabsId}-reviews-tab"
               class="f1genz-sapo-review-section-tab ${reviewsSelected ? 'f1genz-sapo-review-section-tab--active' : ''}"
@@ -2649,8 +2716,7 @@
               aria-selected="${reviewsSelected ? 'true' : 'false'}"
               aria-controls="${this._tabsId}-reviews-panel"
               tabindex="${reviewsSelected ? '0' : '-1'}"
-            >Đánh giá</button>
-            <button
+            >Đánh giá</button><button
               type="button"
               id="${this._tabsId}-qna-tab"
               class="f1genz-sapo-review-section-tab ${reviewsSelected ? '' : 'f1genz-sapo-review-section-tab--active'}"
@@ -2659,25 +2725,21 @@
               aria-selected="${reviewsSelected ? 'false' : 'true'}"
               aria-controls="${this._tabsId}-qna-panel"
               tabindex="${reviewsSelected ? '-1' : '0'}"
-            >Hỏi đáp</button>
-          </div>
-          <section
+            >Hỏi đáp</button></div><section
             id="${this._tabsId}-reviews-panel"
             class="f1genz-sapo-review-section-panel"
             data-f1genzapp-section-panel="reviews"
             role="tabpanel"
             aria-labelledby="${this._tabsId}-reviews-tab"
             ${reviewsSelected ? '' : 'hidden'}
-          >${reviewPanel}</section>
-          <section
+          >${reviewPanel}</section><section
             id="${this._tabsId}-qna-panel"
             class="f1genz-sapo-review-section-panel"
             data-f1genzapp-section-panel="qna"
             role="tabpanel"
             aria-labelledby="${this._tabsId}-qna-tab"
             ${reviewsSelected ? 'hidden' : ''}
-          >${qnaPanel}</section>
-        </div>`;
+          >${qnaPanel}</section></div>`;
         return;
       }
 
@@ -2688,6 +2750,297 @@
         </div>
       `;
     }
+  }
+
+  const QUICKVIEW_SELECTOR = [
+    '#quick-view-product',
+    '#quickview-modal',
+    '[data-quickview]',
+    '[data-quick-view]',
+    '[id^="quickview"]',
+    '[id^="quick-view"]',
+    '[class~="quickview-product"]',
+    '[class~="quick-view-product"]',
+  ].join(', ');
+  const F1GENZ_ELEMENT_SELECTOR =
+    'f1genz-reviews-panel, f1genz-qna-panel, f1genz-reviews, f1genz-rating-badge, f1genz-product-schema';
+  const F1GENZ_RUNTIME_OWNED_SELECTOR = '[data-f1genz-runtime-owned]';
+
+  function normalizeNumericId(value) {
+    const normalized = String(value || '').trim();
+    return /^\d+$/.test(normalized) ? normalized : '';
+  }
+
+  function resolveQuickviewStoreDomain(options = {}) {
+    const explicit = String(options.storeDomain || '').trim();
+    if (explicit) return explicit;
+
+    const runtimeConfig = readRuntimeConfigObject();
+    const configured = String(
+      runtimeConfig && (runtimeConfig.storeDomain || runtimeConfig.store) || '',
+    ).trim();
+    if (configured) return configured;
+
+    const existing = document.querySelector(`${F1GENZ_ELEMENT_SELECTOR}[storeDomain]`);
+    return existing ? String(existing.getAttribute('storeDomain') || '').trim() : '';
+  }
+
+  function findPageProductId() {
+    const f1 = document.querySelector(
+      'f1genz-rating-badge[product-id], f1genz-product-schema[product-id]',
+    );
+    if (f1) return normalizeNumericId(f1.getAttribute('product-id'));
+    const dataPid = document.querySelector('[data-product-id]');
+    if (dataPid) return normalizeNumericId(dataPid.getAttribute('data-product-id'));
+    const nativeBadge = document.querySelector('.sapo-product-reviews-badge[data-id]');
+    if (nativeBadge) return normalizeNumericId(nativeBadge.getAttribute('data-id'));
+    return '';
+  }
+
+  function readDomPrice() {
+    const priceEl = document.querySelector('[itemprop="price"]');
+    if (priceEl) return String(priceEl.getAttribute('content') || priceEl.textContent || '').trim();
+    const meta = document.querySelector('meta[property="product:price:amount"], meta[property="og:price:amount"]');
+    if (meta) return String(meta.getAttribute('content') || '').trim();
+    return schemaPrice(document.querySelector('.product-price, .price')?.textContent || '');
+  }
+
+  function readDomProductContext() {
+    const productId = findPageProductId();
+    if (!productId) return null;
+
+    const ogTitle = document.querySelector('meta[property="og:title"]');
+    const ogImage = document.querySelector('meta[property="og:image"]');
+    const ogUrl = document.querySelector('meta[property="og:url"]');
+    const price = readDomPrice();
+
+    return {
+      productId,
+      name: String(
+        (ogTitle ? ogTitle.content : '') ||
+          document.title || '',
+      ).trim(),
+      image: (ogImage ? ogImage.content : '') || '',
+      url: (ogUrl ? ogUrl.content : '') || window.location.href,
+      price: String(price || '').trim(),
+      brand: '',
+      sku: '',
+      available: !document.querySelector('.sold-out, .outstock, [class*="sold-out"]'),
+      description: '',
+    };
+  }
+
+  function readProductContextFromPage() {
+    const ogType = document.querySelector('meta[property="og:type"]');
+    if (!/product/i.test(ogType ? ogType.getAttribute('content') || '' : '')) return null;
+    return readDomProductContext();
+  }
+
+  let productSchemaMountStarted = false;
+  function mountProductSchemaIfMissing() {
+    if (productSchemaMountStarted) return;
+    productSchemaMountStarted = true;
+    mountProductSchema().catch(() => {});
+  }
+
+  async function mountProductSchema() {
+    if (document.querySelector('f1genz-product-schema')) return;
+    if (!resolveRuntimeApiUrl()) return;
+    const config = readRuntimeConfigObject();
+    if (config && config.autoProductSchema === false) return;
+    try {
+      const ssrScripts = document.querySelectorAll('script[type="application/ld+json"]');
+      for (let i = 0; i < ssrScripts.length; i++) {
+        const content = ssrScripts[i].textContent || '';
+        if (content.includes('"@type"') && content.includes('"Product"') && content.includes('"aggregateRating"')) {
+          return;
+        }
+      }
+    } catch {}
+    const context = readProductContextFromPage();
+    if (!context) return;
+    const storeDomain = resolveQuickviewStoreDomain();
+    if (!storeDomain) return;
+    const schema = document.createElement('f1genz-product-schema');
+    schema.setAttribute('storeDomain', storeDomain);
+    schema.setAttribute('product-id', String(context.productId));
+    if (context.name) schema.setAttribute('product-name', context.name);
+    if (context.image) schema.setAttribute('product-image', context.image);
+    if (context.url) schema.setAttribute('product-url', context.url);
+    if (context.price) schema.setAttribute('price', context.price);
+    if (context.brand) schema.setAttribute('brand', context.brand);
+    if (context.sku) schema.setAttribute('sku', context.sku);
+    if (context.available != null) {
+      schema.setAttribute('availability', context.available ? 'InStock' : 'OutOfStock');
+    }
+    if (context.description) schema.setAttribute('description', context.description);
+    (document.head || document.body).appendChild(schema);
+  }
+
+  function resolveProductIdFromModalContext(quickview) {
+    const candidates = [];
+    if (quickview.querySelectorAll) {
+      quickview.querySelectorAll('[id]').forEach((element) => {
+        const id = String(element.id || '');
+        const match =
+          /^product-(?:select-)?(\d+)$/.exec(id) ||
+          /^product-select-(\d+)(?:-|$)/.exec(id);
+        if (match) candidates.push(match[1]);
+      });
+      quickview.querySelectorAll('script').forEach((script) => {
+        const text = String(script.textContent || '');
+        const match =
+          /(?:product_quickview|product_quick)\s*[=:]\s*\{[\s\S]*?\b(?:id|product_id)\s*:\s*(\d+)/.exec(
+            text,
+          );
+        if (match) candidates.push(match[1]);
+      });
+    }
+    [
+      window.product_quickview,
+      window.product_quick,
+    ].forEach((value) => {
+      if (value && typeof value === 'object') {
+        const id = normalizeNumericId(value.id || value.product_id);
+        if (id) candidates.push(id);
+      }
+    });
+    return candidates.length ? candidates[0] : '';
+  }
+
+  function resolveQuickviewProductId(quickview, options = {}) {
+    const explicit = normalizeNumericId(options.productId || options.productid);
+    if (explicit) return explicit;
+
+    const productNode = quickview.matches('[data-product-id], [data-productid]')
+      ? quickview
+      : quickview.querySelector('[data-product-id], [data-productid]');
+    const fromData = productNode
+      ? normalizeNumericId(
+          productNode.getAttribute('data-product-id') ||
+          productNode.getAttribute('data-productid'),
+        )
+      : '';
+    if (fromData) return fromData;
+
+    const fromContext = resolveProductIdFromModalContext(quickview);
+    if (fromContext) return fromContext;
+    return '';
+  }
+
+  function resolveQuickviewRoot(root) {
+    if (root instanceof Element) {
+      if (root.matches(QUICKVIEW_SELECTOR)) return root;
+      return root.closest(QUICKVIEW_SELECTOR);
+    }
+    return null;
+  }
+
+  function mountQuickview(root, options = {}) {
+    const quickview = resolveQuickviewRoot(root);
+    if (!quickview) return null;
+
+    const storeDomain = resolveQuickviewStoreDomain(options);
+    if (!storeDomain) return null;
+
+    const productId = resolveQuickviewProductId(quickview, options);
+    if (!productId) return null;
+
+    const existingBadges = quickview.querySelectorAll('f1genz-rating-badge');
+    if (existingBadges.length) {
+      existingBadges.forEach((badge) => {
+        if (!String(badge.getAttribute('product-id') || '').trim()) {
+          badge.setAttribute('product-id', productId);
+        }
+        if (!String(badge.getAttribute('storeDomain') || '').trim()) {
+          badge.setAttribute('storeDomain', storeDomain);
+        }
+      });
+      return existingBadges[0];
+    }
+
+    const badge = document.createElement('f1genz-rating-badge');
+    badge.setAttribute('product-id', productId);
+    badge.setAttribute('storeDomain', storeDomain);
+
+    const nativeRating = quickview.querySelector('.sapo-product-reviews-badge');
+    if (nativeRating) {
+      nativeRating.setAttribute('data-f1genz-runtime-owned', 'quickview-rating');
+      nativeRating.replaceChildren(badge);
+      return badge;
+    }
+
+    const anchor = quickview.querySelector('.product-title, .product-price');
+    if (!anchor || !anchor.parentNode) return null;
+    const host = document.createElement('div');
+    host.setAttribute('data-f1genz-runtime-owned', 'quickview-rating');
+    host.appendChild(badge);
+    anchor.insertAdjacentElement('afterend', host);
+    return badge;
+  }
+
+  function collectQuickviews(root) {
+    const quickviews = [];
+    if (root instanceof Element) {
+      const closest = resolveQuickviewRoot(root);
+      if (closest) quickviews.push(closest);
+    }
+    if (root && typeof root.querySelectorAll === 'function') {
+      root.querySelectorAll(QUICKVIEW_SELECTOR).forEach((quickview) => {
+        if (!quickviews.includes(quickview)) quickviews.push(quickview);
+      });
+    }
+    return quickviews;
+  }
+
+  function scan(root = document, options = {}) {
+    const mounted = [];
+    collectQuickviews(root).forEach((quickview) => {
+      const badge = mountQuickview(quickview, options);
+      if (badge) mounted.push(badge);
+    });
+    return mounted;
+  }
+
+  function isF1genzOwnedNode(node) {
+    return node instanceof Element && Boolean(
+      node.matches(F1GENZ_ELEMENT_SELECTOR) ||
+      node.closest(`${F1GENZ_ELEMENT_SELECTOR}, ${F1GENZ_RUNTIME_OWNED_SELECTOR}`),
+    );
+  }
+
+  function installDynamicContentObserver() {
+    if (!document.body || window.__f1genzSapoReviewDynamicContentObserver) return;
+    const pendingRoots = new Set();
+    let scanFrame = 0;
+    const scheduleScan = (root) => {
+      if (!root || isF1genzOwnedNode(root)) return;
+      pendingRoots.add(root);
+      if (scanFrame) return;
+      scanFrame = window.requestAnimationFrame(() => {
+        scanFrame = 0;
+        const roots = Array.from(pendingRoots);
+        pendingRoots.clear();
+        roots.forEach((pendingRoot) => scan(pendingRoot));
+      });
+    };
+
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (
+          mutation.target instanceof Element &&
+          mutation.target.closest(QUICKVIEW_SELECTOR)
+        ) {
+          scheduleScan(mutation.target);
+        }
+        mutation.addedNodes.forEach((node) => {
+          if (node instanceof Element) scheduleScan(node);
+        });
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.__f1genzSapoReviewDynamicContentObserver = observer;
+    scan(document);
   }
 
   if (!customElements.get('f1genz-reviews-panel')) {
@@ -2709,4 +3062,29 @@
   if (!customElements.get('f1genz-product-schema')) {
     customElements.define('f1genz-product-schema', F1GProductSchemaElement);
   }
+
+  window.F1GENZStorefront = Object.assign(window.F1GENZStorefront || {}, {
+    scan,
+    mountQuickview,
+    internals: {
+      formatSafeRichText,
+      buildProductSchema,
+      getPublicReviews,
+      getPublicQuestions,
+      getWidgetConfig,
+      defaultConfig: DEFAULT_CONFIG,
+      prepareImageForUpload,
+      normalizeVideoLink,
+      limits: { IMAGE_MAX_SIZE, VIDEO_MAX_SIZE, IMAGE_SOFT_TARGET },
+    },
+  });
+
+  if (document.body) {
+    installDynamicContentObserver();
+  } else {
+    document.addEventListener('DOMContentLoaded', installDynamicContentObserver, { once: true });
+  }
+
+  mountProductSchemaIfMissing();
+  document.addEventListener('DOMContentLoaded', mountProductSchemaIfMissing, { once: true });
 })();

@@ -34,7 +34,6 @@ const noRootAntdFiles = [
   resolve(clientRoot, "src", "App.jsx"),
   resolve(clientRoot, "src", "pages", "auth", "AuthScreen.jsx"),
   resolve(clientRoot, "src", "pages", "auth", "login", "index.jsx"),
-  resolve(clientRoot, "src", "pages", "auth", "grandservice", "index.jsx"),
 ];
 
 for (const filePath of noRootAntdFiles) {
@@ -81,8 +80,8 @@ for (const asset of readdirSync(assetRoot).filter((name) => name.endsWith(".js")
 }
 pass(`largest JS gzip ${fmt(largestJsAsset.gzip)} <= ${fmt(budgets.singleJsGzip)} (${largestJsAsset.name})`);
 
-const storefrontJs = resolve(repoRoot, "server", "storefront", "snippets", "f1genz-storefront.js");
-const storefrontCss = resolve(repoRoot, "server", "storefront", "snippets", "f1genz-storefront.css");
+const storefrontJs = resolve(repoRoot, "storefront", "snippets", "f1genz-storefront.js");
+const storefrontCss = resolve(repoRoot, "storefront", "snippets", "f1genz-storefront.css");
 const storefrontJsGzip = gzipSize(storefrontJs);
 const storefrontCssGzip = gzipSize(storefrontCss);
 

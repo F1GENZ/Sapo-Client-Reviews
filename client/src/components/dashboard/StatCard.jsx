@@ -1,6 +1,6 @@
 import { Card, Flex, Typography } from "antd";
 import { ArrowRightOutlined } from "@ant-design/icons";
-import Link from "../OrgLink";
+import Link from "../StoreLink";
 
 const { Text } = Typography;
 

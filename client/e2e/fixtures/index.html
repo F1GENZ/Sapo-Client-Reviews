@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>F1GENZ storefront widget fixture</title>
+  <script>
+    window.__F1GENZ_STOREFRONT_CONFIG = {
+      apiUrl: "http://127.0.0.1:4302",
+      store: "e2e-store.mysapo.net"
+    };
+  </script>
+  <link rel="stylesheet" href="/f1genz-storefront.css">
+  <script src="/f1genz-storefront.js" defer></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fff; color: #1e293b; }
+    .product-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .product-head h1 { margin: 0; font-size: 20px; }
+  </style>
+</head>
+<body>
+  <header class="product-head">
+    <h1>San pham mau</h1>
+    <f1genz-rating-badge id="badge" product-id="1074668505" storeDomain="e2e-store.mysapo.net"></f1genz-rating-badge>
+  </header>
+  <main id="storefront-container">
+    <f1genz-reviews id="widget" product-id="1074668505" storeDomain="e2e-store.mysapo.net"></f1genz-reviews>
+    <f1genz-product-schema
+      id="schema"
+      product-id="1074668505"
+      storeDomain="e2e-store.mysapo.net"
+      product-name="Ao thun E2E"
+      product-url="/ao-thun-e2e"
+      product-image="/images/ao-thun.jpg"
+      brand="E2E Brand"
+      sku="E2E-001"
+      price="199000"
+      currency="VND"
+      availability="InStock"></f1genz-product-schema>
+  </main>
+  <footer><p id="page-end">end</p></footer>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var widget = document.getElementById("widget");
+      if (params.has("email")) widget.setAttribute("customer-email", params.get("email"));
+      if (params.has("phone")) widget.setAttribute("customer-phone", params.get("phone"));
+    })();
+  </script>
+</body>
+</html>

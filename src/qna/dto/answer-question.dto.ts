@@ -1,7 +1,10 @@
-import { IsString, IsOptional, MaxLength, IsIn } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, IsIn } from 'class-validator';
 
 export class AnswerQuestionDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @IsNotEmpty()
   @MaxLength(2000)
   answer!: string;
 

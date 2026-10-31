@@ -1,6 +1,6 @@
 const INTERNAL_PROTOCOL_RE = /^[a-z][a-z0-9+.-]*:/i;
 
-function appendOrgidToPath(path, orgid, currentSearch) {
+function appendStoreDomainToPath(path, storeDomain) {
   const currentPath =
     typeof window !== "undefined" ? window.location.pathname : "/";
   const basePath =
@@ -9,23 +9,15 @@ function appendOrgidToPath(path, orgid, currentSearch) {
       : path || "/";
 
   const url = new URL(basePath, window.location.origin);
-  if (!url.searchParams.get("orgid")) {
-    url.searchParams.set("orgid", orgid);
+  if (!url.searchParams.get("storeDomain")) {
+    url.searchParams.set("storeDomain", storeDomain);
   }
-
-  const currentParams = new URLSearchParams(currentSearch);
-  ["dev", "password"].forEach((key) => {
-    const value = currentParams.get(key);
-    if (value && !url.searchParams.get(key)) {
-      url.searchParams.set(key, value);
-    }
-  });
 
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-export function withOrgid(to, orgid, currentSearch = "") {
-  if (!orgid || typeof window === "undefined") {
+export function withStoreDomain(to, storeDomain) {
+  if (!storeDomain || typeof window === "undefined") {
     return to;
   }
 
@@ -33,13 +25,13 @@ export function withOrgid(to, orgid, currentSearch = "") {
     if (INTERNAL_PROTOCOL_RE.test(to) || to.startsWith("//")) {
       return to;
     }
-    return appendOrgidToPath(to, orgid, currentSearch);
+    return appendStoreDomainToPath(to, storeDomain);
   }
 
   if (!to || typeof to !== "object") return to;
 
   const path = `${to.pathname || window.location.pathname}${to.search || ""}${to.hash || ""}`;
-  const routed = appendOrgidToPath(path, orgid, currentSearch);
+  const routed = appendStoreDomainToPath(path, storeDomain);
   const url = new URL(routed, window.location.origin);
   return {
     ...to,
@@ -47,4 +39,12 @@ export function withOrgid(to, orgid, currentSearch = "") {
     search: url.search,
     hash: url.hash,
   };
+}
+
+export function buildLoginPath({ storeDomain, error } = {}) {
+  const params = new URLSearchParams();
+  if (storeDomain) params.set("storeDomain", storeDomain);
+  if (error) params.set("error", error);
+  const query = params.toString();
+  return query ? `/install/login?${query}` : "/install/login";
 }

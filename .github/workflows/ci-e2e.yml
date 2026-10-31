@@ -1,0 +1,154 @@
+name: E2E
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_call:
+    inputs:
+      skip-verify:
+        description: Skip the server verify job when the caller already runs it
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  server-verify:
+    name: Server lint, test, and build
+    if: ${{ !inputs.skip-verify }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout latest commit
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify
+        run: npm run verify
+
+  server-contract:
+    name: Server HTTP contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      E2E_DB_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      E2E_REDIS_HOST: 127.0.0.1
+      E2E_REDIS_PORT: "6379"
+    steps:
+      - name: Checkout latest commit
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build
+        run: npm run build
+
+      - name: Black-box HTTP contract
+        run: npm run test:e2e
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-e2e-report
+          path: e2e/artifacts
+          if-no-files-found: ignore
+
+  client-journeys:
+    name: Client build, budget and browser journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout latest commit
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build
+        working-directory: client
+        env:
+          NODE_ENV: production
+        run: npm run build
+
+      - name: Performance budget
+        working-directory: client
+        run: npm run budget
+
+      - name: Client unit tests
+        working-directory: client
+        run: npm run test:unit
+
+      - name: Install Chromium
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+
+      - name: Admin journeys and storefront widget
+        working-directory: client
+        run: npm run test:e2e
+
+      - name: Upload artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-e2e-artifacts
+          path: client/e2e/artifacts
+          if-no-files-found: ignore
