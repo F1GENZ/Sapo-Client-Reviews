@@ -961,6 +961,13 @@ async function main() {
 
     await check("M3", "an uploaded URL is accepted as review media and the object is deleted with the review", async () => {
       assert.ok(uploaded, "M2 did not upload");
+      const crossProduct = await api(`${PUBLIC_REVIEWS}/1006`, {
+        method: "POST",
+        headers: submitHeaders,
+        json: { rating: 4, author: "Cross Product", content: "Borrowed photo", media: [{ url: uploaded.url, type: "image" }] },
+      });
+      expectStatus(crossProduct, [200, 201]);
+      assert.deepEqual(crossProduct.body.data.media, [], "a URL uploaded for product 1001 must be dropped from a review of product 1006");
       const res = await api(`${PUBLIC_REVIEWS}/1001`, {
         method: "POST",
         headers: submitHeaders,

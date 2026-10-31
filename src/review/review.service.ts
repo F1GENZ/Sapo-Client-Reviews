@@ -757,7 +757,7 @@ export class ReviewService {
   ): Promise<string[]> {
     if (!urls.length) return [];
     const others = await this.prisma.reviewProduct.findMany({
-      where: { shopId, productId, reviewId: { not: reviewId }, media: { not: Prisma.DbNull } },
+      where: { shopId, NOT: { productId, reviewId }, media: { not: Prisma.DbNull } },
       select: { media: true },
     });
     const referenced = new Set(others.flatMap((row) => toMedia(row.media).map((item) => item.url)));

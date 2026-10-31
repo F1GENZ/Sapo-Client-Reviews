@@ -175,7 +175,7 @@ const storedReview = (reviewId: string, media: MediaItem[] | null, productId = '
 });
 
 type FindManyArgs = {
-  where: { shopId: string; productId: string; reviewId: { not: string }; media: { not: unknown } };
+  where: { shopId: string; NOT: { productId: string; reviewId: string }; media: { not: unknown } };
   select: { media: boolean };
 };
 
@@ -189,8 +189,8 @@ const makeDeletionHarness = (initial: StoredReview[]) => {
       findMany: async (args: FindManyArgs) => {
         lookups.push(args);
         return [...rows.values()]
-          .filter((row) => row.shopId === args.where.shopId && row.productId === args.where.productId)
-          .filter((row) => row.reviewId !== args.where.reviewId.not && row.media !== null)
+          .filter((row) => row.shopId === args.where.shopId && row.media !== null)
+          .filter((row) => !(row.productId === args.where.NOT.productId && row.reviewId === args.where.NOT.reviewId))
           .map((row) => ({ media: row.media }));
       },
     },
@@ -221,22 +221,22 @@ const makeDeletionHarness = (initial: StoredReview[]) => {
   return { service, released, lookups };
 };
 
-test('deleting a review keeps media that another review of the same product still shows', async () => {
+test('deleting a review keeps media that any other review of the shop still shows', async () => {
   const shared: MediaItem = { url: urlOf(1), type: 'image' };
   const own: MediaItem = { url: urlOf(2), type: 'image' };
   const harness = makeDeletionHarness([
     storedReview('victim', [shared, own]),
     storedReview('spam', [shared]),
     storedReview('elsewhere', [own], '200'),
+    storedReview('legacy', [shared], '300'),
   ]);
   const result = await harness.service.deleteReview('tok', STORE, '100', 'victim');
   assert.equal(result.deleted, true);
-  assert.deepEqual(harness.released, [{ urls: [own.url], store: STORE }]);
+  assert.deepEqual(harness.released.flatMap((call) => call.urls), [], 'both urls are still referenced elsewhere in the shop');
 
   const [lookup] = harness.lookups;
   assert.equal(lookup.where.shopId, 'shop_1');
-  assert.equal(lookup.where.productId, '100');
-  assert.equal(lookup.where.reviewId.not, 'victim');
+  assert.deepEqual(lookup.where.NOT, { productId: '100', reviewId: 'victim' });
   assert.equal(lookup.where.media.not, Prisma.DbNull);
 });
 
@@ -248,10 +248,10 @@ test('deleting the last reference releases everything; a youtube link is passed 
   assert.deepEqual(harness.released, [{ urls: [only.url, embed.url], store: STORE }]);
 });
 
-test('editing a review keeps removed media that another review of the same product still shows', async () => {
+test('editing a review keeps removed media that any other review of the shop still shows', async () => {
   const shared: MediaItem = { url: urlOf(4), type: 'image' };
   const own: MediaItem = { url: urlOf(5), type: 'image' };
-  const harness = makeDeletionHarness([storedReview('r1', [shared, own]), storedReview('r2', [shared])]);
+  const harness = makeDeletionHarness([storedReview('r1', [shared, own]), storedReview('r2', [shared], '300')]);
   await harness.service.editReview('tok', STORE, '100', 'r1', { media: [] });
   assert.deepEqual(harness.released, [{ urls: [own.url], store: STORE }]);
   assert.equal(harness.lookups.length, 1);

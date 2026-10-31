@@ -177,9 +177,9 @@ const makeReviewService = ({ rows, media }: { rows: Map<string, StoredReview>; m
   const prisma = {
     appInstall: { findUnique: async () => ({ shopId: 'shop_1', metadata: {}, status: 'active' }) },
     reviewProduct: {
-      findMany: async ({ where }: { where: { productId: string; reviewId?: { not: string } } }) =>
+      findMany: async ({ where }: { where: { NOT: { productId: string; reviewId: string } } }) =>
         [...rows.values()]
-          .filter((row) => row.productId === where.productId && row.reviewId !== where.reviewId?.not && row.media.length > 0)
+          .filter((row) => !(row.productId === where.NOT.productId && row.reviewId === where.NOT.reviewId) && row.media.length > 0)
           .map((row) => ({ media: row.media })),
     },
   };
