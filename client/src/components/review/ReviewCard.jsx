@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import {
   DeleteOutlined,
   SendOutlined,
+  RobotOutlined,
   EditOutlined,
   PlusOutlined,
   LinkOutlined,
@@ -13,6 +14,7 @@ import {
   EyeInvisibleOutlined,
   ShoppingOutlined,
 } from "@ant-design/icons";
+import { suggestReviewReply } from "../../common/ApiService";
 import {
   Popconfirm,
   Card,
@@ -106,6 +108,7 @@ const ReviewCard = ({
   const [replying, setReplying] = useState(false);
   const [replyText, setReplyText] = useState(review.reply || "");
   const [replySubmitting, setReplySubmitting] = useState(false);
+  const [aiSuggesting, setAiSuggesting] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [statusAction, setStatusAction] = useState(null);
   const [editVideoUrl, setEditVideoUrl] = useState("");
@@ -248,6 +251,26 @@ const ReviewCard = ({
     } catch (error) {
       toast.error(getErrorMessage(error, "Lưu đánh giá thất bại"));
       dispatchEdit({ type: "DONE" });
+    }
+  };
+
+  const handleSuggestReply = async () => {
+    if (!review.content) return;
+    setAiSuggesting(true);
+    try {
+      const result = await suggestReviewReply({
+        content: String(review.content).slice(0, 2000),
+        rating: Number(review.rating) || 5,
+        author: review.author ? String(review.author).slice(0, 100) : undefined,
+      });
+      if (result?.suggestion) {
+        setReplyText(result.suggestion);
+        toast.success("Đã tạo gợi ý, bạn có thể sửa trước khi gửi");
+      }
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Chưa tạo được gợi ý AI"));
+    } finally {
+      setAiSuggesting(false);
     }
   };
 
@@ -568,7 +591,7 @@ const ReviewCard = ({
               maxLength={2000}
               showCount
             />
-            <Flex gap={8} style={{ marginTop: 8 }}>
+            <Flex gap={8} style={{ marginTop: 8 }} wrap>
               <Button
                 type="primary"
                 size="small"
@@ -578,6 +601,16 @@ const ReviewCard = ({
                 disabled={!replyText.trim() || isBusy}
               >
                 Gửi phản hồi
+              </Button>
+              <Button
+                size="small"
+                icon={<RobotOutlined />}
+                loading={aiSuggesting}
+                disabled={isBusy || !review.content}
+                title={!review.content ? "Đánh giá không có nội dung để gợi ý" : undefined}
+                onClick={handleSuggestReply}
+              >
+                Gợi ý bằng AI
               </Button>
               <Button
                 size="small"

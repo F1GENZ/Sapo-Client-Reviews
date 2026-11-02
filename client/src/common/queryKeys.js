@@ -17,4 +17,9 @@ export const shopQueryKeys = {
   widgetConfig: (storeDomain) => scopedKey(storeDomain, "widgetConfig"),
   spamConfig: (storeDomain) => scopedKey(storeDomain, "spamConfig"),
   opsHealth: (storeDomain) => scopedKey(storeDomain, "ops", "health"),
+  outboundEndpoints: (storeDomain) => scopedKey(storeDomain, "outbound", "endpoints"),
+  outboundEvents: (storeDomain) => scopedKey(storeDomain, "outbound", "events"),
+  outboundDeliveries: (storeDomain, endpointId, page) =>
+    scopedKey(storeDomain, "outbound", "deliveries", endpointId || "none", page || 0),
+  aiStatus: (storeDomain) => scopedKey(storeDomain, "ai", "status"),
 };

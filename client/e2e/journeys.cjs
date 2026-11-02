@@ -494,7 +494,7 @@ async function main() {
       await expectText(page, "7 webhook đã xử lý", "processed webhook count");
       assert.equal(new URL(page.url()).pathname, "/health", `redirected away to ${page.url()}`);
       assert(requests.some((r) => r.pathname === "/api/admin/ops/health"), "ops health was not requested");
-      await expectVisible(page.getByRole("menuitem", { name: "Health" }), "Health menu entry");
+      await expectVisible(page.getByRole("menuitem", { name: "Vận hành" }), "Vận hành menu entry");
       const body = await page.locator("body").innerText();
       assert.ok(!/Dùng thử|Đã hủy/.test(body), "billing status labels are still rendered");
     });
@@ -526,12 +526,15 @@ async function main() {
     await scenario("V1", "review list renders authors, ratings and per-status tab counts", async ({ page }) => {
       await go(page, withStore("/reviews"));
       await expectText(page, "Khách Chờ Duyệt");
-      const rowWidth = await page.locator(".f1g-bulk-table__row").first().locator(":scope > *").first().evaluate((n) => n.getBoundingClientRect().width);
-      assert(rowWidth > 300, `row content is crushed to ${Math.round(rowWidth)}px: the row grid reserves a checkbox column the markup never renders`);
+      const rowWidth = await page.locator(".f1g-bulk-table__row").first().evaluate((row) => {
+        const card = row.querySelector(".ant-card");
+        return card ? card.getBoundingClientRect().width : 0;
+      });
+      assert(rowWidth > 300, `review card is crushed to ${Math.round(rowWidth)}px next to the selection checkbox`);
       await expectText(page, "Khách Đã Duyệt");
       await expectText(page, "Khách Spam");
       const tabs = await page.getByRole("tab").allInnerTexts();
-      assert(tabs.some((t) => /Chưa duyệt/.test(t)), `no pending tab in ${tabs.join(",")}`);
+      assert(tabs.some((t) => /Chờ duyệt/.test(t)), `no pending tab in ${tabs.join(",")}`);
       assert(tabs.some((t) => /Spam/.test(t)), `no spam tab in ${tabs.join(",")}`);
     });
 
@@ -577,7 +580,7 @@ async function main() {
     await scenario("V2", "status tab asks the server for that status and shows only matching reviews", async ({ page, requests }) => {
       await go(page, withStore("/reviews"));
       await expectText(page, "Khách Chờ Duyệt");
-      await page.getByRole("tab", { name: /Chưa duyệt/ }).click();
+      await page.getByRole("tab", { name: /Chờ duyệt/ }).click();
       await waitUntil(() => requests.some((r) => r.pathname === "/api/admin/reviews" && /status=pending/.test(r.search)));
       assert(requests.some((r) => r.pathname === "/api/admin/reviews" && /status=pending/.test(r.search)), "no status=pending request");
       await expectText(page, "Khách Chờ Duyệt");
@@ -713,8 +716,11 @@ async function main() {
     await scenario("Q1", "Q&A list renders questions, answers and status counts", async ({ page }) => {
       await go(page, withStore("/qna"));
       await expectText(page, "Áo có màu xanh không?");
-      const rowWidth = await page.locator(".f1g-bulk-table__row").first().locator(":scope > *").first().evaluate((n) => n.getBoundingClientRect().width);
-      assert(rowWidth > 300, `row content is crushed to ${Math.round(rowWidth)}px: the row grid reserves a checkbox column the markup never renders`);
+      const rowWidth = await page.locator(".f1g-bulk-table__row").first().evaluate((row) => {
+        const card = row.querySelector(".ant-card");
+        return card ? card.getBoundingClientRect().width : 0;
+      });
+      assert(rowWidth > 300, `question card is crushed to ${Math.round(rowWidth)}px next to the selection checkbox`);
 
       await expectText(page, "Giặt máy được không?");
       await expectText(page, "Giặt máy ở chế độ nhẹ.");
@@ -793,9 +799,11 @@ async function main() {
       const title = page.getByText("Tiêu đề widget", { exact: true }).locator("xpath=ancestor::div[1]//input").first();
       await expectVisible(title, "title input");
       assert.equal(await title.inputValue(), "Đánh giá sản phẩm");
-      assert.equal(await page.getByRole("button", { name: "Chưa có thay đổi" }).first().isDisabled(), true, "save is enabled with no change");
+      assert.equal(await page.getByRole("button", { name: "Lưu thay đổi" }).isDisabled(), true, "save is enabled with no change");
+      assert.equal(await page.getByText("Chưa có thay đổi", { exact: true }).count(), 1, "clean state needs a status line");
       await title.fill("Khách hàng nói gì");
-      await page.getByRole("button", { name: "Lưu hiển thị" }).click();
+      await expectText(page, "Có thay đổi chưa lưu");
+      await page.getByRole("button", { name: "Lưu thay đổi" }).click();
       await waitUntil(() => state.persisted.widgetPuts.length > 0);
       assert.equal(state.persisted.widgetPuts.length, 1, "expected exactly one PUT");
       assert.equal(state.widgetConfig.titleText, "Khách hàng nói gì");
@@ -827,7 +835,7 @@ async function main() {
         await route.fallback();
       });
       await title.fill("Bản nháp");
-      await page.getByRole("button", { name: "Lưu hiển thị" }).click();
+      await page.getByRole("button", { name: "Lưu thay đổi" }).click();
       await expectText(page, "boom");
       assert.equal(await page.getByText("Đã lưu cấu hình").count(), 0, "success toast shown for a failed save");
       assert.equal(await title.inputValue(), "Bản nháp", "draft was discarded after a failed save");
@@ -841,7 +849,7 @@ async function main() {
       await expectVisible(input, "blocked word input");
       await input.fill("cá-độ");
       await input.press("Enter");
-      await page.getByRole("button", { name: "Lưu duyệt & Spam" }).click();
+      await page.getByRole("button", { name: "Lưu thay đổi" }).click();
       await waitUntil(() => state.persisted.spamPuts.length > 0);
       assert.deepEqual(state.spamConfig.blockedWords, ["cá-độ"]);
     });
@@ -853,7 +861,7 @@ async function main() {
       await expectVisible(maxLength, "max content length input");
       await maxLength.fill("1200");
       await page.getByRole("switch", { name: "Tự động duyệt review mới từ storefront" }).click();
-      await page.getByRole("button", { name: "Lưu duyệt & Spam" }).click();
+      await page.getByRole("button", { name: "Lưu thay đổi" }).click();
       await waitUntil(() => state.persisted.spamPuts.length > 0 && state.persisted.widgetPuts.length > 0);
       assert.deepEqual(
         state.persisted.dropped.filter((k) => k.startsWith("spam.") || k.startsWith("widget.")),
@@ -864,20 +872,23 @@ async function main() {
       assert.equal(state.widgetConfig.autoApprove, true);
     });
 
-    await scenario("S6", "leaving a tab with unsaved changes asks before discarding", async ({ page }) => {
+    await scenario("S6", "switching tabs keeps the draft, marks the tab, and one save persists every tab", async ({ page, state }) => {
       await go(page, withStore("/settings"));
       const title = page.getByText("Tiêu đề widget", { exact: true }).locator("xpath=ancestor::div[1]//input").first();
       await expectVisible(title, "title input");
       await title.fill("Chưa lưu");
-      let dialogText = "";
-      page.once("dialog", async (dialog) => {
-        dialogText = dialog.message();
-        await dialog.dismiss();
-      });
+      await expectVisible(page.locator(".f1g-tab-dot").first(), "unsaved dot");
       await page.getByRole("tab", { name: /Form gửi/ }).click();
-      await waitUntil(() => dialogText !== "");
-      assert.match(dialogText, /chưa lưu/i);
-      assert.equal(await title.inputValue(), "Chưa lưu", "dismissing the prompt must keep the draft");
+      assert.ok(await page.locator(".f1g-tab-dot").count() >= 1, "the dirty tab keeps its marker after switching");
+      await page.getByRole("switch", { name: "Cho phép hình ảnh đánh giá" }).click();
+      await page.getByRole("tab", { name: /Hiển thị/ }).click();
+      await expectVisible(title, "title input");
+      assert.equal(await title.inputValue(), "Chưa lưu", "the draft must survive a tab switch");
+      await page.getByRole("button", { name: "Lưu thay đổi" }).click();
+      await waitUntil(() => state.persisted.widgetPuts.length > 0);
+      assert.equal(state.widgetConfig.titleText, "Chưa lưu");
+      await waitUntil(() => state.widgetConfig.allowImage === false);
+      assert.equal(await page.locator(".f1g-tab-dot").count(), 0, "dots clear after a successful save");
     });
 
     console.log("\n--- authentication ---");

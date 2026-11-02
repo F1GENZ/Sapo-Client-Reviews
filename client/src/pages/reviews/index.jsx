@@ -1,13 +1,16 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  bulkReviews,
   deleteReview,
+  exportReviews,
   fetchAllReviews,
   fetchDashboardOverview,
   fetchProduct,
   fetchProducts,
   fetchReviews,
   fetchReviewSummary,
+  importReviews,
   replyToReview,
   updateReview,
   updateReviewStatus,
@@ -22,9 +25,16 @@ import ReviewForm from "../../components/review/ReviewForm";
 import RatingSummary from "../../components/review/RatingSummary";
 import ProductSearch from "../../components/ProductSearch";
 import {
+  BulkActionBar,
+  ExportMenu,
+  ImportModal,
+  downloadExport,
+} from "../../components/DataTools";
+import {
   Badge,
   Breadcrumb,
   Button,
+  Checkbox,
   Col,
   Empty,
   Flex,
@@ -48,8 +58,11 @@ import {
   PlusOutlined,
   StarFilled,
   UnorderedListOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import { useSearchParams } from "react-router-dom";
+import { toast } from "../../common/toast";
+import { getErrorMessage } from "../../common/getErrorMessage";
 import Link from "../../components/StoreLink";
 
 const { Text, Title } = Typography;
@@ -63,7 +76,7 @@ const isGenericProductLabel = (value, productId) =>
 const STATUS_CONFIG = {
   all: { label: "Tất cả" },
   approved: { label: "Đã duyệt", color: "success" },
-  pending: { label: "Chưa duyệt", color: "warning" },
+  pending: { label: "Chờ duyệt", color: "warning" },
   hidden: { label: "Đã ẩn", color: "default" },
   spam: { label: "Spam", color: "error" },
   unreplied: { label: "Chưa phản hồi", color: "purple" },
@@ -86,9 +99,17 @@ const ReviewGridCell = memo(({
   onReply,
   onEdit,
   onStatusChange,
+  selected,
+  onToggleSelect,
 }) => (
   <Col xs={24} sm={12} xl={8}>
-    <div className="f1g-bulk-table__grid-card">
+    <div className={`f1g-bulk-table__grid-card${selected ? " f1g-bulk-table__grid-card--selected" : ""}`}>
+      {onToggleSelect ? (
+        <label className="f1g-bulk-table__select">
+          <Checkbox checked={selected} onChange={onToggleSelect} />
+          <span className="f1g-bulk-table__select-text">Chọn</span>
+        </label>
+      ) : null}
       <ReviewCard
         review={review}
         productId={productId}
@@ -112,8 +133,16 @@ const ReviewTableRow = memo(({
   onReply,
   onEdit,
   onStatusChange,
+  selected,
+  onToggleSelect,
 }) => (
-  <div className="f1g-bulk-table__row">
+  <div className={`f1g-bulk-table__row${selected ? " f1g-bulk-table__row--selected" : ""}`}>
+    {onToggleSelect ? (
+      <label className="f1g-bulk-table__select">
+        <Checkbox checked={selected} onChange={onToggleSelect} />
+        <span className="f1g-bulk-table__select-text">Chọn đánh giá {review.author || ""}</span>
+      </label>
+    ) : null}
     <ReviewCard
       review={review}
       productId={productId}
@@ -142,6 +171,10 @@ const ReviewsPage = () => {
   const [viewMode, setViewMode] = useState("list");
   const [page, setPage] = useState(1);
   const [productSearchQuery, setProductSearchQuery] = useState("");
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [importOpen, setImportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const [selectedProduct, setSelectedProduct] = useState(
     searchParams.get("product") || null,
@@ -595,6 +628,59 @@ const ReviewsPage = () => {
     }
   }, [getProductId, invalidateAll, patchReviewCaches]);
 
+  const reviewKey = useCallback(
+    (review) => `${getProductId(review) || ""}:${review.id}`,
+    [getProductId],
+  );
+
+  const toggleSelected = useCallback((review) => {
+    const key = reviewKey(review);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, [reviewKey]);
+
+  const clearSelection = useCallback(() => setSelectedKeys(new Set()), []);
+
+  const selectedItems = useMemo(() => {
+    const items = [];
+    selectedKeys.forEach((key) => {
+      const [productId, reviewId] = String(key).split(":");
+      if (productId && reviewId) items.push({ productId, reviewId });
+    });
+    return items;
+  }, [selectedKeys]);
+
+  const runBulk = useCallback(async (action) => {
+    if (!selectedItems.length) return;
+    setBulkBusy(true);
+    try {
+      const result = await bulkReviews(action, selectedItems);
+      toast.success(`Đã xử lý ${result.updated} mục, bỏ qua ${result.skipped} mục`);
+      clearSelection();
+      void invalidateAll();
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Thao tác hàng loạt thất bại"));
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [clearSelection, invalidateAll, selectedItems]);
+
+  const handleExport = useCallback(async (format) => {
+    setExporting(true);
+    try {
+      const payload = await exportReviews(format);
+      downloadExport(payload, `danh-gia.${format}`);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Xuất dữ liệu thất bại"));
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
   const tabItems = Object.entries(STATUS_CONFIG).map(([key, config]) => ({
     key,
     label: (
@@ -672,6 +758,10 @@ const ReviewsPage = () => {
               Xem trực tiếp
             </Button>
           )}
+          <ExportMenu label="Xuất" onExport={handleExport} loading={exporting} />
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)} style={actionButtonStyle}>
+            Nhập CSV/JSON
+          </Button>
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -739,7 +829,7 @@ const ReviewsPage = () => {
           </Button>
         ) : null}
 
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
           <ProductSearch
             products={searchableProducts}
             statsMap={statsMap}
@@ -862,6 +952,8 @@ const ReviewsPage = () => {
           setPage(1);
         }}
         items={tabItems}
+        tabBarGutter={12}
+        more={{ icon: <span aria-hidden="true">…</span> }}
       />
 
       {selectedProduct && summary && (
@@ -870,20 +962,81 @@ const ReviewsPage = () => {
         </div>
       )}
 
+      <BulkActionBar
+        count={selectedKeys.size}
+        onClear={clearSelection}
+        busy={bulkBusy}
+        actions={[
+          { key: "approve", label: "Duyệt", onClick: () => void runBulk("approve") },
+          { key: "pending", label: "Chờ duyệt", onClick: () => void runBulk("pending") },
+          { key: "hidden", label: "Ẩn", onClick: () => void runBulk("hidden") },
+          { key: "spam", label: "Spam", onClick: () => void runBulk("spam") },
+          { key: "delete", label: "Xoá", danger: true, onClick: () => void runBulk("delete") },
+        ]}
+      />
+
       <div style={{ minHeight: 200 }}>
         {reviewsLoading ? (
           <Flex justify="center" style={{ padding: "60px 0" }}>
             <Spin />
           </Flex>
         ) : filteredReviews.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Không có đánh giá nào"
-          />
+          (statusCounts.all || 0) === 0 && !selectedProduct ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="Chưa có đánh giá nào trên shop"
+            >
+              <Space wrap>
+                <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
+                  Tạo đánh giá đầu tiên
+                </Button>
+                <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+                  Nhập từ CSV/JSON
+                </Button>
+                <Button href="/dev" target="_blank" rel="noopener noreferrer">
+                  Gắn widget vào theme
+                </Button>
+              </Space>
+            </Empty>
+          ) : (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="Không có đánh giá khớp bộ lọc hiện tại"
+            >
+              <Button
+                onClick={() => {
+                  setStarFilter(null);
+                  setActiveTab("all");
+                  setProductSearchQuery("");
+                  if (!selectedProduct) handleProductChange(null);
+                  setPage(1);
+                }}
+              >
+                Xoá bộ lọc
+              </Button>
+            </Empty>
+          )
         ) : (
           <div className="f1g-bulk-table">
             <div className="f1g-bulk-table__head">
               <Flex align="center" gap={12} style={{ minWidth: 0 }}>
+                {viewMode === "list" ? (
+                  <Checkbox
+                    aria-label="Chọn tất cả đánh giá trên trang"
+                    checked={visibleReviews.length > 0 && visibleReviews.every((review) => selectedKeys.has(reviewKey(review)))}
+                    indeterminate={visibleReviews.some((review) => selectedKeys.has(reviewKey(review))) && !visibleReviews.every((review) => selectedKeys.has(reviewKey(review)))}
+                    onChange={(event) => {
+                      setSelectedKeys((prev) => {
+                        const next = new Set(prev);
+                        visibleReviews.forEach((review) => {
+                          if (event.target.checked) next.add(reviewKey(review));
+                          else next.delete(reviewKey(review));
+                        });
+                        return next;
+                      });
+                    }}
+                  />
+                ) : null}
                 <Text strong>Đánh giá</Text>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {visibleReviewCount} mục đang hiển thị
@@ -904,6 +1057,8 @@ const ReviewsPage = () => {
                       onReply={handleReply}
                       onEdit={handleEdit}
                       onStatusChange={handleStatusChange}
+                      selected={selectedKeys.has(reviewKey(review))}
+                      onToggleSelect={() => toggleSelected(review)}
                     />
                   ))}
                 </Row>
@@ -920,6 +1075,8 @@ const ReviewsPage = () => {
                     onReply={handleReply}
                     onEdit={handleEdit}
                     onStatusChange={handleStatusChange}
+                    selected={selectedKeys.has(reviewKey(review))}
+                    onToggleSelect={() => toggleSelected(review)}
                   />
                 ))}
               </div>
@@ -963,6 +1120,16 @@ const ReviewsPage = () => {
         />
       </Modal>
 
+      <ImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        importFn={importReviews}
+        subjectLabel="đánh giá"
+        onImported={() => {
+          clearSelection();
+          void invalidateAll();
+        }}
+      />
     </AdminLayout>
   );
 };

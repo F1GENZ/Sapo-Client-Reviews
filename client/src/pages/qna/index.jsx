@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  bulkQuestions,
+  exportQuestions,
   fetchAllQuestions,
   fetchProduct,
   fetchProducts,
@@ -11,6 +13,7 @@ import {
   updateQuestion,
   deleteQuestion,
   fetchDashboardOverview,
+  importQuestions,
 } from "../../common/ApiService";
 import { getStoreDomain } from "../../common/AuthStorage";
 import { shopQueryKeys } from "../../common/queryKeys";
@@ -18,13 +21,19 @@ import AdminLayout from "../../components/layout/AdminLayout";
 import { buildProductUrl } from "../../common/storeUrl";
 import QnaCard from "../../components/qna/QnaCard";
 import ProductSearch from "../../components/ProductSearch";
+import {
+  BulkActionBar,
+  ExportMenu,
+  ImportModal,
+  downloadExport,
+} from "../../components/DataTools";
 import { getErrorMessage } from "../../common/getErrorMessage";
 import { toast } from "../../common/toast";
 import {
-  Spin, Select, Tabs, Button, Empty, Modal, Form, Input,
-  Breadcrumb, Typography, Flex, Badge, Pagination, Grid,
+  Spin, Select, Tabs, Button, Empty, Modal, Form, Input, Tooltip, Checkbox,
+  Breadcrumb, Typography, Flex, Badge, Pagination, Grid, Space,
 } from "antd";
-import { PlusOutlined, HomeOutlined } from "@ant-design/icons";
+import { PlusOutlined, HomeOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSearchParams } from "react-router-dom";
 import Link from "../../components/StoreLink";
 
@@ -59,6 +68,8 @@ const QuestionTableRow = memo(({
   onStatusChange,
   onDelete,
   onEdit,
+  selected,
+  onToggleSelect,
 }) => {
   const handleAnswer = useCallback(
     (questionId, data) => onAnswer(questionId, data, question),
@@ -78,7 +89,13 @@ const QuestionTableRow = memo(({
   );
 
   return (
-    <div className="f1g-bulk-table__row">
+    <div className={`f1g-bulk-table__row${selected ? " f1g-bulk-table__row--selected" : ""}`}>
+      {onToggleSelect ? (
+        <label className="f1g-bulk-table__select">
+          <Checkbox checked={selected} onChange={onToggleSelect} />
+          <span className="f1g-bulk-table__select-text">Chọn câu hỏi {question.author || ""}</span>
+        </label>
+      ) : null}
       <QnaCard
         question={question}
         onAnswer={handleAnswer}
@@ -102,6 +119,10 @@ const QnaPage = () => {
   const [sortBy, setSortBy] = useState("newest");
   const [page, setPage] = useState(1);
   const [selectedProduct, setSelectedProduct] = useState(searchParams.get("product") || null);
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [importOpen, setImportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [selectedProductSnapshot, setSelectedProductSnapshot] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [form] = Form.useForm();
@@ -283,6 +304,56 @@ const QnaPage = () => {
     (question) => selectedProduct || question?.productId,
     [selectedProduct],
   );
+
+  const questionKey = useCallback(
+    (question) => `${getQuestionProductId(question) || ""}:${question.id}`,
+    [getQuestionProductId],
+  );
+
+  const toggleSelected = useCallback((question) => {
+    const key = questionKey(question);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, [questionKey]);
+
+  const clearSelection = useCallback(() => setSelectedKeys(new Set()), []);
+
+  const selectedItems = useMemo(() =>
+    Array.from(selectedKeys).map((key) => {
+      const [productId, questionId] = String(key).split(":");
+      return { productId, questionId };
+    }).filter((item) => item.productId && item.questionId), [selectedKeys]);
+
+  const runBulk = useCallback(async (action) => {
+    if (!selectedItems.length) return;
+    setBulkBusy(true);
+    try {
+      const result = await bulkQuestions(action, selectedItems);
+      toast.success(`Đã xử lý ${result.updated} mục, bỏ qua ${result.skipped} mục`);
+      clearSelection();
+      void invalidateAll();
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Thao tác hàng loạt thất bại"));
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [clearSelection, invalidateAll, selectedItems]);
+
+  const handleExport = useCallback(async (format) => {
+    setExporting(true);
+    try {
+      const payload = await exportQuestions(format);
+      downloadExport(payload, `hoi-dap.${format}`);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Xuất dữ liệu thất bại"));
+    } finally {
+      setExporting(false);
+    }
+  }, []);
   const patchQuestionCaches = useCallback((productId, questionId, updater) => {
     queryClient.setQueriesData({ queryKey: shopQueryKeys.qnaRoot(storeDomain) }, (current) =>
       current?.items
@@ -443,19 +514,27 @@ const QnaPage = () => {
             width: isMobile ? "100%" : "auto",
           }}
         >
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setShowCreateModal(true)}
-            disabled={!selectedProduct}
-            style={{
-              borderRadius: 6,
-              ...actionButtonStyle,
-              ...(isMobile ? { flexBasis: "100%" } : {}),
-            }}
-          >
-            Tạo câu hỏi
+          <ExportMenu label="Xuất" onExport={handleExport} loading={exporting} />
+          <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)} style={actionButtonStyle}>
+            Nhập CSV/JSON
           </Button>
+          <Tooltip title={!selectedProduct ? "Chọn sản phẩm trước để tạo câu hỏi" : undefined}>
+            <span>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setShowCreateModal(true)}
+                disabled={!selectedProduct}
+                style={{
+                  borderRadius: 6,
+                  ...actionButtonStyle,
+                  ...(isMobile ? { flexBasis: "100%" } : {}),
+                }}
+              >
+                Tạo câu hỏi
+              </Button>
+            </span>
+          </Tooltip>
         </div>
       </Flex>
 
@@ -481,7 +560,7 @@ const QnaPage = () => {
           </Button>
         ) : null}
 
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
           <ProductSearch
             products={products}
             statsMap={statsMap}
@@ -526,6 +605,20 @@ const QnaPage = () => {
           setPage(1);
         }}
         items={tabItems}
+        tabBarGutter={12}
+        more={{ icon: <span aria-hidden="true">…</span> }}
+      />
+
+      <BulkActionBar
+        count={selectedKeys.size}
+        onClear={clearSelection}
+        busy={bulkBusy}
+        actions={[
+          { key: "approve", label: "Duyệt", onClick: () => void runBulk("approve") },
+          { key: "pending", label: "Chờ duyệt", onClick: () => void runBulk("pending") },
+          { key: "hidden", label: "Ẩn", onClick: () => void runBulk("hidden") },
+          { key: "delete", label: "Xoá", danger: true, onClick: () => void runBulk("delete") },
+        ]}
       />
 
       <div style={{ minHeight: 200 }}>
@@ -534,11 +627,52 @@ const QnaPage = () => {
             <Spin />
           </Flex>
         ) : visibleQuestions.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có câu hỏi nào" />
+          (statusCounts.all || 0) === 0 && !selectedProduct ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có câu hỏi nào trên shop">
+              <Space wrap>
+                <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+                  Nhập từ CSV/JSON
+                </Button>
+                <Button href="/dev" target="_blank" rel="noopener noreferrer">
+                  Xem cách bật hỏi đáp
+                </Button>
+              </Space>
+            </Empty>
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có câu hỏi khớp bộ lọc hiện tại">
+              <Button
+                onClick={() => {
+                  setActiveTab("all");
+                  handleProductChange(null);
+                  setPage(1);
+                }}
+              >
+                Xoá bộ lọc
+              </Button>
+            </Empty>
+          )
         ) : (
           <div className="f1g-bulk-table">
             <div className="f1g-bulk-table__head">
               <Flex align="center" gap={12} style={{ minWidth: 0 }}>
+                <Checkbox
+                  aria-label="Chọn tất cả câu hỏi trên trang"
+                  checked={visibleQuestions.length > 0 && visibleQuestions.every((question) => selectedKeys.has(questionKey(question)))}
+                  indeterminate={
+                    visibleQuestions.some((question) => selectedKeys.has(questionKey(question))) &&
+                    !visibleQuestions.every((question) => selectedKeys.has(questionKey(question)))
+                  }
+                  onChange={(event) => {
+                    setSelectedKeys((prev) => {
+                      const next = new Set(prev);
+                      visibleQuestions.forEach((question) => {
+                        if (event.target.checked) next.add(questionKey(question));
+                        else next.delete(questionKey(question));
+                      });
+                      return next;
+                    });
+                  }}
+                />
                 <Text strong>Câu hỏi</Text>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {visibleQuestions.length} mục đang hiển thị
@@ -556,6 +690,8 @@ const QnaPage = () => {
                   onStatusChange={handleStatusChange}
                   onDelete={handleDelete}
                   onEdit={handleEdit}
+                  selected={selectedKeys.has(questionKey(question))}
+                  onToggleSelect={() => toggleSelected(question)}
                 />
               ))}
             </div>
@@ -629,6 +765,16 @@ const QnaPage = () => {
         </Form>
       </Modal>
 
+      <ImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        importFn={importQuestions}
+        subjectLabel="câu hỏi"
+        onImported={() => {
+          clearSelection();
+          void invalidateAll();
+        }}
+      />
     </AdminLayout>
   );
 };

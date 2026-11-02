@@ -79,7 +79,7 @@ function pageOf(rows, search) {
 }
 
 function publicApi(options = {}) {
-  const calls = { configs: 0, reviewLists: [], qnaLists: [], posts: [], questionPosts: [], eligibility: [], summaries: [], tickets: [], uploads: [] };
+  const calls = { configs: 0, reviewLists: [], qnaLists: [], posts: [], questionPosts: [], eligibility: [], summaries: [], tickets: [], uploads: [], sliderLists: [] };
   const reviews = options.reviews || REVIEWS;
   const questions = options.questions || QUESTIONS;
   const resolve = (pathname, method, payload, _state, record) => {
@@ -108,6 +108,22 @@ function publicApi(options = {}) {
     if (match) {
       calls.eligibility.push(payload);
       return { status: 200, body: { data: options.eligibility || { eligible: false, reason: "not_purchased" } } };
+    }
+    match = /^\/api\/public\/reviews\/([^/]+)\/slider$/.exec(pathname);
+    if (match && method === "GET") {
+      calls.sliderLists.push({ productId: match[1], search: record.search });
+      if (options.sliderStatus) return { status: options.sliderStatus, body: { message: "boom" } };
+      const items = (options.sliderItems || REVIEWS.slice(0, 6)).map((row) => ({
+        id: row.id,
+        r: row.rating,
+        a: row.author,
+        t: row.title || undefined,
+        c: row.content,
+        m: "https://cdn.example.com/review-slide.jpg",
+        v: row.verified ? 1 : 0,
+        d: row.created_at,
+      }));
+      return { status: 200, body: { data: { v: 1, updated_at: NOW, items } } };
     }
     match = /^\/api\/public\/reviews\/([^/]+)$/.exec(pathname);
     if (match && method === "GET") {
@@ -175,14 +191,14 @@ async function main() {
     }
   }
 
-  async function open(api, { viewport, init, ready = ".f1genz-sapo-review-summary", query = "", requests } = {}) {
+  async function open(api, { viewport, init, ready = ".f1genz-sapo-review-summary", query = "", requests, file = "index.html" } = {}) {
     const context = await browser.newContext({ viewport: viewport || { width: 1280, height: 900 } });
     if (requests) context.on("request", (request) => requests.push(new URL(request.url()).pathname));
     if (init) await context.addInitScript(init);
     await mockApi(context, { resolve: api.resolve });
     const page = await context.newPage();
     const tracked = trackPageErrors(page);
-    await page.goto(`${server.baseUrl}/index.html${query}`, { waitUntil: "load" });
+    await page.goto(`${server.baseUrl}/${file}${query}`, { waitUntil: "load" });
     if (ready) {
       try {
         await page.waitForSelector(ready, { timeout: 8000 });
@@ -203,12 +219,80 @@ async function main() {
       assert.ok(js <= BUDGET.js, `runtime JS gzip ${js}B > ${BUDGET.js}B`);
       assert.ok(css <= BUDGET.css, `runtime CSS gzip ${css}B > ${BUDGET.css}B`);
     });
-    await check("B2", "runtime has no watermark, AI or slider remnants (every store gets the plain widget)", async () => {
+    await check("B2", "runtime carries no watermark or AI remnants, and registers the curated slider element", async () => {
       const source = fs.readFileSync(RUNTIME_JS, "utf8");
-      for (const needle of ["Powered by", "f1genz-curated-slider", "data-f1genzapp-highlights", "AI Highlights"]) {
+      for (const needle of ["Powered by", "data-f1genzapp-highlights", "AI Highlights"]) {
         assert.ok(!source.includes(needle), `runtime still contains "${needle}"`);
       }
+      assert.ok(source.includes("customElements.define('f1genz-curated-slider'"), "curated slider element is registered");
     });
+    await check("B8", "primary buttons switch to dark text when the accent colour fails AA with white", async () => {
+      const api = publicApi();
+      const first = await open(api);
+      try {
+        const color = await first.page.$eval(".f1genz-sapo-review-btn--write", (node) => getComputedStyle(node).color);
+        assert.equal(color, "rgb(26, 26, 26)", "default amber accent must render dark text, not white");
+      } finally {
+        await first.context.close();
+      }
+      const dark = publicApi({ config: { accentColor: "#0b5ed7" } });
+      const second = await open(dark);
+      try {
+        const color = await second.page.$eval(".f1genz-sapo-review-btn--write", (node) => getComputedStyle(node).color);
+        assert.equal(color, "rgb(255, 255, 255)", "a dark accent keeps white text");
+      } finally {
+        await second.context.close();
+      }
+    });
+
+    await check("B6", "curated slider renders approved reviews as a scroll-snap rail with arrows and verified badges", async () => {
+      const api = publicApi();
+      const { context, page, tracked } = await open(api, {
+        file: "slider.html",
+        ready: ".f1genz-sapo-review-slider__item",
+      });
+      try {
+        assert.equal(api.calls.sliderLists.length, 1);
+        assert.match(api.calls.sliderLists[0].search, /limit=6|limit=15/);
+        const cards = await page.$$eval(".f1genz-sapo-review-slider__item", (nodes) => nodes.length);
+        assert.ok(cards >= 5 && cards <= 15, `rendered ${cards} cards`);
+        const verified = await text(page, ".f1genz-sapo-review-slider__verified");
+        assert.deepEqual(verified, ["Đã mua hàng"]);
+        const hasMedia = await page.$$eval(".f1genz-sapo-review-slider__media", (nodes) => nodes.length);
+        assert.equal(hasMedia, cards);
+        const before = await page.$eval(".f1genz-sapo-review-slider__track", (node) => node.scrollLeft);
+        await page.click('[data-slider-step="1"]');
+        await sleep(400);
+        const after = await page.$eval(".f1genz-sapo-review-slider__track", (node) => node.scrollLeft);
+        assert.ok(after > before, `arrow scrolled the track (${before} -> ${after})`);
+        await assertNoHorizontalOverflow(page, "slider");
+        assert.deepEqual(tracked.errors, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    await check("B7", "curated slider stays empty when the merchant turns it off or the API fails", async () => {
+      const disabled = publicApi({ config: { curatedSliderEnabled: false } });
+      const first = await open(disabled, { file: "slider.html", ready: null });
+      try {
+        await sleep(400);
+        assert.equal(await first.page.$$eval(".f1genz-sapo-review-slider__item", (nodes) => nodes.length), 0);
+        assert.equal(disabled.calls.sliderLists.length, 0, "no request when the merchant disabled the slider");
+      } finally {
+        await first.context.close();
+      }
+      const failing = publicApi({ sliderStatus: 500 });
+      const second = await open(failing, { file: "slider.html", ready: null });
+      try {
+        await sleep(400);
+        assert.equal(await second.page.$$eval(".f1genz-sapo-review-slider__item", (nodes) => nodes.length), 0);
+        assert.deepEqual(second.tracked.errors, [], "a failing slider never throws into the page");
+      } finally {
+        await second.context.close();
+      }
+    });
+
     await check("B3", "theme snippets follow the .bwt dialect (include, only the escape filter, guarded scalar metafields)", async () => {
       const stripComments = (source) => source.replace(/\{%-?\s*comment\s*-?%\}[\s\S]*?\{%-?\s*endcomment\s*-?%\}/g, "");
       for (const file of [THEME_SNIPPET, THEME_SCHEMA]) {

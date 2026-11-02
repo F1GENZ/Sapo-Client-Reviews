@@ -19,6 +19,7 @@ const GuidePage = lazy(() => import("./pages/guide/index"));
 const DevGuidePage = lazy(() => import("./pages/dev/index"));
 const ContactPage = lazy(() => import("./pages/contact/index"));
 const OpsPage = lazy(() => import("./pages/ops/index"));
+const WebhooksPage = lazy(() => import("./pages/webhooks/index"));
 
 const PageLoader = () => (
   <div className="f1g-route-loader" role="status" aria-live="polite" aria-label="Đang tải">
@@ -107,6 +108,7 @@ function App() {
           <Route path="/guide" element={<GuidePage />} />
           <Route path="/dev" element={<DevGuidePage />} />
           <Route path="/contact" element={<ContactPage />} />
+          <Route path="/integrations" element={<WebhooksPage />} />
           <Route path="/health" element={<OpsPage />} />
           <Route path="/ops" element={<OpsPage />} />
           <Route path="/install/login" element={<Login />} />

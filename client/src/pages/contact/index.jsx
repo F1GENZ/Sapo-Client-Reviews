@@ -83,7 +83,7 @@ const ContactItem = ({ icon, label, value, href, tag }) => (
         </Text>
       )}
     </div>
-    {tag ? <Tag color={tag.color} style={{ fontSize: 11 }}>{tag.text}</Tag> : null}
+    {tag ? <Tag color={tag.color} style={{ fontSize: 12 }}>{tag.text}</Tag> : null}
   </Flex>
 );
 
@@ -105,16 +105,16 @@ const ContactPage = () => (
         </Text>
       </div>
       <Link to="/dev">
-        <Tag color="purple" style={{ padding: "4px 10px", margin: 0 }}>Dev guide</Tag>
+        <Tag color="blue" style={{ padding: "4px 10px", margin: 0 }}>Hướng dẫn kỹ thuật</Tag>
       </Link>
     </Flex>
 
     <Alert
-      type="success"
+      type="info"
       showIcon
       style={{ marginBottom: 16 }}
       message="Ưu tiên gửi kèm ngữ cảnh"
-      description="Khi báo lỗi, gửi thêm tên miền cửa hàng (storeDomain, dạng ten-cua-hang.mysapo.net), link sản phẩm, ảnh màn hình và bước tái hiện để xử lý nhanh hơn."
+      description="Khi báo lỗi, gửi thêm tên miền cửa hàng (tên miền cửa hàng, dạng ten-cua-hang.mysapo.net), link sản phẩm, ảnh màn hình và bước tái hiện để xử lý nhanh hơn."
     />
 
     <div

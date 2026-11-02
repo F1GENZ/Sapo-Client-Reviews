@@ -176,3 +176,115 @@ export const deleteQuestion = async (productId, questionId) => {
   const res = await httpClient.delete(`/api/admin/qna/${productId}/${questionId}`);
   return res.data?.data;
 };
+
+export const exportReviews = async (format = "csv") => {
+  const res = await httpClient.get("/api/admin/reviews/export", { params: { format }, timeout: 120000 });
+  return res.data?.data;
+};
+
+export const importReviews = async ({ format, body, dryRun }) => {
+  const path = dryRun ? "/api/admin/reviews/import/dry-run" : "/api/admin/reviews/import";
+  const res = await httpClient.post(path, { format, body, dryRun: dryRun === true }, { timeout: 120000, skipRetry: true });
+  return res.data?.data;
+};
+
+export const fetchReviewImportHistory = async () => {
+  const res = await httpClient.get("/api/admin/reviews/import/history");
+  return res.data?.data;
+};
+
+export const bulkReviews = async (action, items) => {
+  const res = await httpClient.post("/api/admin/reviews/bulk", { action, items }, { timeout: 120000 });
+  return res.data?.data;
+};
+
+export const fetchWidgetConfigRevisions = async () => {
+  const res = await httpClient.get("/api/admin/reviews/widget-config/revisions");
+  return res.data?.data;
+};
+
+export const restoreWidgetConfigRevision = async (revisionId) => {
+  const res = await httpClient.post(`/api/admin/reviews/widget-config/revisions/${revisionId}/restore`);
+  return res.data?.data;
+};
+
+export const exportQuestions = async (format = "csv") => {
+  const res = await httpClient.get("/api/admin/qna/export", { params: { format }, timeout: 120000 });
+  return res.data?.data;
+};
+
+export const importQuestions = async ({ format, body, dryRun }) => {
+  const path = dryRun ? "/api/admin/qna/import/dry-run" : "/api/admin/qna/import";
+  const res = await httpClient.post(path, { format, body, dryRun: dryRun === true }, { timeout: 120000, skipRetry: true });
+  return res.data?.data;
+};
+
+export const bulkQuestions = async (action, items) => {
+  const res = await httpClient.post("/api/admin/qna/bulk", { action, items }, { timeout: 120000 });
+  return res.data?.data;
+};
+
+export const fetchOutboundEndpoints = async () => {
+  const res = await httpClient.get("/api/admin/outbound-webhooks");
+  return res.data?.data;
+};
+
+export const fetchOutboundEvents = async () => {
+  const res = await httpClient.get("/api/admin/outbound-webhooks/events");
+  return res.data?.data;
+};
+
+export const createOutboundEndpoint = async (data) => {
+  const res = await httpClient.post("/api/admin/outbound-webhooks", data);
+  return res.data?.data;
+};
+
+export const updateOutboundEndpoint = async (id, data) => {
+  const res = await httpClient.put(`/api/admin/outbound-webhooks/${id}`, data);
+  return res.data?.data;
+};
+
+export const deleteOutboundEndpoint = async (id) => {
+  const res = await httpClient.delete(`/api/admin/outbound-webhooks/${id}`);
+  return res.data?.data;
+};
+
+export const rotateOutboundSecret = async (id) => {
+  const res = await httpClient.post(`/api/admin/outbound-webhooks/${id}/rotate-secret`);
+  return res.data?.data;
+};
+
+export const testOutboundEndpoint = async (id) => {
+  const res = await httpClient.post(`/api/admin/outbound-webhooks/${id}/test`);
+  return res.data?.data;
+};
+
+export const fetchOutboundDeliveries = async (id, params = {}) => {
+  const res = await httpClient.get(`/api/admin/outbound-webhooks/${id}/deliveries`, { params });
+  return res.data?.data;
+};
+
+export const fetchAiStatus = async () => {
+  const res = await httpClient.get("/api/admin/ai/status");
+  return res.data?.data;
+};
+
+export const suggestReviewReply = async (payload) => {
+  const res = await httpClient.post("/api/admin/ai/reply-suggestion", payload, { timeout: 30000, skipRetry: true });
+  return res.data?.data;
+};
+
+export const syncOpsOrders = async (data = {}) => {
+  const res = await httpClient.post("/api/admin/ops/orders/sync", data, { timeout: 120000, skipRetry: true });
+  return res.data?.data;
+};
+
+export const syncOpsMetafields = async () => {
+  const res = await httpClient.post("/api/admin/ops/metafields/sync-all", {}, { timeout: 120000, skipRetry: true });
+  return res.data?.data;
+};
+
+export const exportOpsDiagnostics = async () => {
+  const res = await httpClient.get("/api/admin/ops/diagnostics/export", { timeout: 60000 });
+  return res.data?.data;
+};

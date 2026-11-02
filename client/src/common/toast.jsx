@@ -12,11 +12,17 @@ const normalizeArgs = (contentOrOptions, maybeDuration) => {
   };
 };
 
+const ERROR_DURATION_SECONDS = 6;
+
 const createToastApi = (api) => ({
   open: (contentOrOptions) => api.open(normalizeArgs(contentOrOptions)),
   success: (contentOrOptions, maybeDuration) => api.success(normalizeArgs(contentOrOptions, maybeDuration)),
-  error: (contentOrOptions, maybeDuration) => api.error(normalizeArgs(contentOrOptions, maybeDuration)),
-  warning: (contentOrOptions, maybeDuration) => api.warning(normalizeArgs(contentOrOptions, maybeDuration)),
+  error: (contentOrOptions, maybeDuration) => api.error(
+    normalizeArgs(contentOrOptions, maybeDuration ?? ERROR_DURATION_SECONDS),
+  ),
+  warning: (contentOrOptions, maybeDuration) => api.warning(
+    normalizeArgs(contentOrOptions, maybeDuration ?? ERROR_DURATION_SECONDS),
+  ),
   info: (contentOrOptions, maybeDuration) => api.info(normalizeArgs(contentOrOptions, maybeDuration)),
   loading: (contentOrOptions, maybeDuration) => api.loading(normalizeArgs(contentOrOptions, maybeDuration)),
   destroy: (key) => api.destroy(key),

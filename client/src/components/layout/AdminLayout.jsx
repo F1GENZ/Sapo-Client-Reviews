@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ConfigProvider, Layout, Menu, Typography, Button } from "antd";
 import {
+  ApiOutlined,
   HomeOutlined,
   StarOutlined,
   QuestionCircleOutlined,
@@ -40,9 +41,10 @@ const menuItems = [
   { key: "/qna", icon: <QuestionCircleOutlined />, label: "Hỏi đáp" },
   { key: "/settings", icon: <SettingOutlined />, label: "Cấu hình" },
   { key: "/guide", icon: <BookOutlined />, label: "Hướng dẫn" },
+  { key: "/integrations", icon: <ApiOutlined />, label: "Tích hợp" },
   { key: "/contact", icon: <CustomerServiceOutlined />, label: "Liên hệ" },
-  { key: "/dev", icon: <CodeOutlined />, label: "Dev guide" },
-  { key: "/health", icon: <HeartOutlined />, label: "Health" },
+  { key: "/dev", icon: <CodeOutlined />, label: "Hướng dẫn kỹ thuật" },
+  { key: "/health", icon: <HeartOutlined />, label: "Vận hành" },
 ];
 
 const AdminLayoutContent = ({ children }) => {
@@ -262,7 +264,7 @@ const AdminLayoutContent = ({ children }) => {
           >
             <Text
               type="secondary"
-              style={{ display: "block", fontSize: 11, lineHeight: 1.5, color: "rgba(255, 255, 255, 0.64)" }}
+              style={{ display: "block", fontSize: 12, lineHeight: 1.5, color: "rgba(255, 255, 255, 0.75)" }}
               title={BUILD_INFO.buildTimeRaw || undefined}
             >
               Build lúc {BUILD_INFO.buildTime}
@@ -279,7 +281,7 @@ const AdminLayoutContent = ({ children }) => {
           transition: "margin-left 0.25s",
         }}
       >
-        <Content style={{ padding: isMobile ? 14 : 24, minHeight: "100vh", minWidth: 0 }}>
+        <Content style={{ padding: isMobile ? 14 : 24, minHeight: isMobile ? "calc(100svh - 48px)" : "100vh", minWidth: 0 }}>
           <div
             className="f1g-admin-content-shell"
             style={{

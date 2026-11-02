@@ -488,7 +488,7 @@ const DashboardPage = () => {
 
         <Flex justify="space-between" align="flex-start" gap={16} wrap="wrap" style={{ marginBottom: 18 }}>
           <div>
-            <Title level={3} style={{ margin: 0, lineHeight: 1.2 }}>
+            <Title level={4} style={{ margin: 0, lineHeight: 1.2 }}>
               Tổng quan
             </Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
@@ -496,11 +496,18 @@ const DashboardPage = () => {
             </Text>
           </div>
           <Flex align="center" gap={8} wrap="wrap">
-            <Tag color={pendingWork ? "gold" : "green"} style={{ margin: 0, padding: "4px 10px", borderRadius: 6 }}>
-              {pendingWork ? "Cần xử lý" : "Ổn định"}
+            <Tag
+              color={!overview.totalReviews && !overview.totalQuestions ? "default" : pendingWork ? "gold" : "green"}
+              style={{ margin: 0, padding: "4px 10px", borderRadius: 6 }}
+            >
+              {!overview.totalReviews && !overview.totalQuestions
+                ? "Chưa có dữ liệu"
+                : pendingWork
+                  ? "Cần xử lý"
+                  : "Ổn định"}
             </Tag>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Cập nhật {overview.lastUpdated ? timeAgo(overview.lastUpdated) : "vừa xong"}
+              {overview.lastUpdated ? `Cập nhật ${timeAgo(overview.lastUpdated)}` : "Chưa có hoạt động"}
             </Text>
           </Flex>
         </Flex>
@@ -520,18 +527,46 @@ const DashboardPage = () => {
             <Spin size="large" />
           </div>
         ) : !overview.totalReviews && !overview.totalQuestions ? (
-          <Card style={cardStyle} styles={{ body: { padding: 36, textAlign: "center" } }}>
-            <Empty
-              description="Chưa có dữ liệu để hiển thị"
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-            />
-            <Flex justify="center" gap={10} wrap="wrap">
-              <Link to={buildRoute("/reviews")}>
-                <Button type="primary" icon={<StarFilled />}>Quản lý đánh giá</Button>
-              </Link>
-              <Link to={buildRoute("/qna")}>
-                <Button icon={<QuestionCircleFilled />}>Quản lý hỏi đáp</Button>
-              </Link>
+          <Card style={cardStyle} styles={{ body: { padding: 32 } }}>
+            <Flex vertical gap={16}>
+              <div>
+                <Title level={5} style={{ margin: 0 }}>Bắt đầu trong 3 bước</Title>
+                <Text type="secondary">
+                  Shop chưa có đánh giá nào nên tổng quan đang trống. Làm theo thứ tự dưới đây để widget hoạt động.
+                </Text>
+              </div>
+              <Flex vertical gap={12}>
+                <Flex align="flex-start" gap={12}>
+                  <Tag color="blue">1</Tag>
+                  <div>
+                    <Text strong>Gắn widget vào theme</Text>
+                    <div>
+                      <Text type="secondary">Thêm snippet vào trang sản phẩm theo hướng dẫn kỹ thuật.</Text>
+                    </div>
+                    <Link to={buildRoute("/dev")}>Mở hướng dẫn kỹ thuật →</Link>
+                  </div>
+                </Flex>
+                <Flex align="flex-start" gap={12}>
+                  <Tag color="blue">2</Tag>
+                  <div>
+                    <Text strong>Kiểm tra cấu hình</Text>
+                    <div>
+                      <Text type="secondary">Chọn màu, bố cục và điều kiện gửi đánh giá.</Text>
+                    </div>
+                    <Link to={buildRoute("/settings")}>Mở cấu hình →</Link>
+                  </div>
+                </Flex>
+                <Flex align="flex-start" gap={12}>
+                  <Tag color="blue">3</Tag>
+                  <div>
+                    <Text strong>Tạo hoặc nhập đánh giá đầu tiên</Text>
+                    <div>
+                      <Text type="secondary">Nhập từ CSV/JSON để giữ dữ liệu cũ, hoặc tạo thủ công.</Text>
+                    </div>
+                    <Link to={buildRoute("/reviews")}>Mở quản lý đánh giá →</Link>
+                  </div>
+                </Flex>
+              </Flex>
             </Flex>
           </Card>
         ) : (

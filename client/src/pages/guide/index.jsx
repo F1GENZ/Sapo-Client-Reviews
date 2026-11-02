@@ -49,8 +49,9 @@ const faqItems = [
     label: "Import dữ liệu nên dùng lúc nào?",
     children: (
       <Paragraph type="secondary" style={{ margin: 0, lineHeight: 1.7 }}>
-        Dùng khi shop cần chuyển dữ liệu từ hệ thống khác sang app. File mẫu nằm trong popup Import của
-        từng màn hình. Nên chạy <Text strong>Kiểm tra trước</Text> trước khi import thật.
+        Dùng khi shop cần chuyển dữ liệu từ hệ thống khác sang app. Vào màn <Text strong>Đánh giá</Text> hoặc
+        <Text strong> Hỏi đáp</Text>, bấm <Text strong>Nhập CSV/JSON</Text> để chọn tệp hoặc dán nội dung. Mỗi lần
+        nhập tối đa 1000 dòng; luôn bấm <Text strong>Kiểm tra dữ liệu</Text> trước khi ghi thật.
       </Paragraph>
     ),
   },
@@ -101,10 +102,10 @@ const GuidePage = () => (
       </div>
       <Flex gap={8} wrap="wrap">
         <Link to="/dev">
-          <Tag color="blue" style={{ padding: "4px 10px", margin: 0 }}>Dev guide</Tag>
+          <Tag color="blue" style={{ padding: "4px 10px", margin: 0 }}>Hướng dẫn kỹ thuật</Tag>
         </Link>
         <Link to="/contact">
-          <Tag color="purple" style={{ padding: "4px 10px", margin: 0 }}>Liên hệ hỗ trợ</Tag>
+          <Tag color="blue" style={{ padding: "4px 10px", margin: 0 }}>Liên hệ hỗ trợ</Tag>
         </Link>
       </Flex>
     </Flex>
@@ -133,7 +134,8 @@ const GuidePage = () => (
         </Flex>
         <Steps
           direction="vertical"
-          current={-1}
+          current={0}
+          status="process"
           items={[
             {
               title: "Kiểm tra tổng quan",
@@ -157,7 +159,7 @@ const GuidePage = () => (
             },
             {
               title: "Import dữ liệu khi cần",
-              description: "Dùng Import CSV/JSON để nhập một lần nhiều sản phẩm. Luôn kiểm tra trước khi import thật.",
+              description: "Dùng Nhập CSV/JSON ở màn Đánh giá hoặc Hỏi đáp để nhập một lần nhiều dòng. Luôn kiểm tra trước khi ghi thật.",
               icon: <ImportOutlined />,
             },
             {

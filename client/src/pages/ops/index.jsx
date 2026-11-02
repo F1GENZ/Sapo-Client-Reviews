@@ -3,11 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Badge,
+  Breadcrumb,
   Button,
   Card,
+  Collapse,
   Col,
   Empty,
   Flex,
+  Popconfirm,
   Row,
   Space,
   Table,
@@ -21,6 +24,7 @@ import {
   BuildOutlined,
   CheckCircleOutlined,
   HeartOutlined,
+  HistoryOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
@@ -28,15 +32,19 @@ import {
 } from "@ant-design/icons";
 import AdminLayout from "../../components/layout/AdminLayout";
 import {
+  exportOpsDiagnostics,
   fetchOpsHealth,
   resyncOpsConfig,
   resyncOpsWebhooks,
   backfillOpsCatalog,
+  syncOpsMetafields,
+  syncOpsOrders,
 } from "../../common/ApiService";
 import { toast } from "../../common/toast";
 import { getErrorMessage } from "../../common/getErrorMessage";
 import { getStoreDomain } from "../../common/AuthStorage";
 import { shopQueryKeys } from "../../common/queryKeys";
+import Link from "../../components/StoreLink";
 
 const { Title, Text } = Typography;
 
@@ -49,10 +57,19 @@ const formatTime = (value) => {
     minute: "2-digit",
     day: "2-digit",
     month: "2-digit",
+    year: "numeric",
   });
 };
 
 const formatNumber = (value) => Number(value || 0).toLocaleString("vi-VN");
+
+const webhookRowStatus = {
+  processed: "Đã xử lý",
+  failed: "Lỗi",
+  processing: "Đang xử lý",
+  received: "Đã nhận",
+  ignored: "Bỏ qua",
+};
 
 const statusColor = {
   processed: "success",
@@ -99,8 +116,14 @@ const NumberCard = ({ label, value, suffix, icon }) => {
   );
 };
 
-const ServiceCard = ({ title, ok, icon, description, detail }) => {
+const ServiceCard = ({ title, state = "ok", icon, description, detail }) => {
   const { token } = theme.useToken();
+  const tone = {
+    ok: { bg: token.colorSuccessBg, fg: token.colorSuccessText, badge: "success", text: "OK" },
+    warn: { bg: token.colorWarningBg, fg: token.colorWarningText, badge: "warning", text: "Cần chú ý" },
+    error: { bg: token.colorErrorBg, fg: token.colorErrorText, badge: "error", text: "Lỗi" },
+    neutral: { bg: token.colorFillSecondary, fg: token.colorTextSecondary, badge: "default", text: "Chưa có dữ liệu" },
+  }[state] || {};
   return (
     <Card size="small" styles={{ body: { padding: 16, minHeight: 118 } }}>
       <Flex justify="space-between" align="flex-start" gap={12} wrap="wrap">
@@ -112,8 +135,8 @@ const ServiceCard = ({ title, ok, icon, description, detail }) => {
               borderRadius: 8,
               display: "grid",
               placeItems: "center",
-              background: ok ? token.colorSuccessBg : token.colorErrorBg,
-              color: ok ? token.colorSuccessText : token.colorErrorText,
+              background: tone.bg,
+              color: tone.fg,
               flexShrink: 0,
             }}
           >
@@ -132,7 +155,7 @@ const ServiceCard = ({ title, ok, icon, description, detail }) => {
             </div>
           </div>
         </Space>
-        <Badge status={ok ? "success" : "error"} text={ok ? "OK" : "Lỗi"} />
+        <Badge status={tone.badge} text={tone.text} />
       </Flex>
       {detail && (
         <Text
@@ -222,6 +245,43 @@ const OpsPage = () => {
     },
   });
 
+  const syncOrders = useMutation({
+    mutationFn: () => syncOpsOrders({ pages: 1 }),
+    onSuccess: async (result) => {
+      toast.success(
+        `Đã đồng bộ ${result?.orders || 0} đơn (${result?.resolved || 0} khách khớp, ${result?.skipped || 0} bỏ qua)`,
+      );
+      await invalidate();
+    },
+    onError: (error) => toast.error(getErrorMessage(error, "Đồng bộ đơn hàng thất bại")),
+  });
+
+  const syncMetafields = useMutation({
+    mutationFn: syncOpsMetafields,
+    onSuccess: async (result) => {
+      toast.success(`Đã đẩy ${result?.synced || 0} metafield, ${result?.queued || 0} xếp hàng`);
+      await invalidate();
+    },
+    onError: (error) => toast.error(getErrorMessage(error, "Đồng bộ metafield thất bại")),
+  });
+
+  const diagnostics = useMutation({
+    mutationFn: exportOpsDiagnostics,
+    onSuccess: (payload) => {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `f1genz-chan-doan-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Đã tải gói chẩn đoán");
+    },
+    onError: (error) => toast.error(getErrorMessage(error, "Xuất chẩn đoán thất bại")),
+  });
+
   const webhookRows = Array.isArray(data?.webhooks?.latest)
     ? data.webhooks.latest
     : [];
@@ -236,11 +296,23 @@ const OpsPage = () => {
     active: "Đang hoạt động",
     needs_reinstall: "Cần cài lại",
     uninstalled: "Đã gỡ",
+    trial: "Dùng thử",
     unknown: "Không xác định",
+  };
+
+  const webhookStatusLabel = {
+    registered: "Đã đăng ký",
+    not_configured: "Chưa đăng ký",
+    failed: "Đăng ký lỗi",
+    pending: "Đang đăng ký",
   };
 
   return (
     <AdminLayout>
+      <Breadcrumb
+        items={[{ title: <Link to="/">Tổng quan</Link> }, { title: "Vận hành" }]}
+        style={{ marginBottom: 16 }}
+      />
       <Flex
         justify="space-between"
         align="center"
@@ -249,11 +321,11 @@ const OpsPage = () => {
         style={{ marginBottom: 16 }}
       >
         <div>
-          <Title level={3} style={{ margin: 0 }}>
+          <Title level={4} style={{ margin: 0 }}>
             Vận hành
           </Title>
           <Text type="secondary">
-            Trạng thái app trên store và các thao tác vận hành Sapo.
+            Trạng thái app trên store và các thao tác đồng bộ với Sapo.
           </Text>
         </div>
         <Space wrap>
@@ -264,29 +336,84 @@ const OpsPage = () => {
           >
             Làm mới
           </Button>
-          <Button
-            icon={<SettingOutlined />}
-            loading={resyncConfig.isPending}
-            onClick={() => resyncConfig.mutate()}
-          >
-            Resync config
-          </Button>
-          <Button
-            icon={<SafetyCertificateOutlined />}
-            loading={resyncWebhooks.isPending}
-            onClick={() => resyncWebhooks.mutate()}
-          >
-            Resync webhooks
-          </Button>
-          <Button
-            icon={<BuildOutlined />}
-            loading={backfillCatalog.isPending}
-            onClick={() => backfillCatalog.mutate()}
-          >
-            Backfill catalog
-          </Button>
         </Space>
       </Flex>
+
+      <Collapse
+        style={{ marginBottom: 16, background: "#fff" }}
+        items={[
+          {
+            key: "tools",
+            label: "Công cụ vận hành (thay đổi dữ liệu)",
+            children: (
+              <Space wrap size={8}>
+                <Popconfirm
+                  title="Đồng bộ lại cấu hình storefront?"
+                  description="Đẩy widget config và metafield cấu hình xuống store, khoảng 10–30 giây."
+                  okText="Đồng bộ"
+                  cancelText="Hủy"
+                  onConfirm={() => resyncConfig.mutate()}
+                >
+                  <Button icon={<SettingOutlined />} loading={resyncConfig.isPending}>
+                    Đồng bộ lại cấu hình
+                  </Button>
+                </Popconfirm>
+                <Popconfirm
+                  title="Đăng ký lại webhook với Sapo?"
+                  description="Xoá và tạo lại webhook cho store, khoảng 10–20 giây."
+                  okText="Đăng ký lại"
+                  cancelText="Hủy"
+                  onConfirm={() => resyncWebhooks.mutate()}
+                >
+                  <Button icon={<SafetyCertificateOutlined />} loading={resyncWebhooks.isPending}>
+                    Đăng ký lại webhook
+                  </Button>
+                </Popconfirm>
+                <Popconfirm
+                  title="Nạp lại danh mục sản phẩm?"
+                  description="Quét lại sản phẩm từ Sapo, tối đa 5 trang mỗi lần và có giới hạn tần suất."
+                  okText="Nạp lại"
+                  cancelText="Hủy"
+                  onConfirm={() => backfillCatalog.mutate()}
+                >
+                  <Button icon={<BuildOutlined />} loading={backfillCatalog.isPending}>
+                    Nạp lại danh mục
+                  </Button>
+                </Popconfirm>
+                <Popconfirm
+                  title="Đồng bộ đơn hàng gần đây?"
+                  description="Đọc 1 trang 50 đơn mới nhất để xác định khách đã mua hàng."
+                  okText="Đồng bộ"
+                  cancelText="Hủy"
+                  onConfirm={() => syncOrders.mutate()}
+                >
+                  <Button icon={<ApiOutlined />} loading={syncOrders.isPending}>
+                    Đồng bộ đơn hàng
+                  </Button>
+                </Popconfirm>
+                <Popconfirm
+                  title="Đẩy lại toàn bộ metafield?"
+                  description="Ghi lại điểm đánh giá cho mọi sản phẩm đang hoạt động."
+                  okText="Đẩy lại"
+                  cancelText="Hủy"
+                  onConfirm={() => syncMetafields.mutate()}
+                >
+                  <Button icon={<ReloadOutlined />} loading={syncMetafields.isPending}>
+                    Đẩy lại metafield
+                  </Button>
+                </Popconfirm>
+                <Button
+                  icon={<HistoryOutlined />}
+                  loading={diagnostics.isPending}
+                  onClick={() => diagnostics.mutate()}
+                >
+                  Xuất gói chẩn đoán
+                </Button>
+              </Space>
+            ),
+          },
+        ]}
+      />
 
       <Card
         loading={isLoading}
@@ -296,39 +423,41 @@ const OpsPage = () => {
           marginBottom: 16,
         }}
       >
-        <Row gutter={[12, 12]}>
-          <Col xs={24} md={8}>
-            <ServiceCard
-              title="Store"
-              ok={Boolean(data?.storeDomain)}
-              icon={<ShopOutlined />}
-              description={data?.storeDomain || "Đang kiểm tra"}
-              detail={`Status: ${statusLabel[data?.status] || data?.status || "unknown"}`}
-            />
-          </Col>
-          <Col xs={24} md={8}>
-            <ServiceCard
-              title="Webhook"
-              ok={webhookFailed === 0}
-              icon={<SafetyCertificateOutlined />}
-              description={data?.webhookStatus || "not_configured"}
-              detail={
-                webhookFailed > 0
+        <div className="f1g-auto-grid">
+          <ServiceCard
+            title="Store"
+            state={data?.status === "active" ? "ok" : data?.status ? "warn" : "neutral"}
+            icon={<ShopOutlined />}
+            description={data?.storeDomain || "Đang kiểm tra"}
+            detail={`Trạng thái: ${statusLabel[data?.status] || data?.status || "chưa rõ"}`}
+          />
+          <ServiceCard
+            title="Webhook"
+            state={
+              webhookFailed > 0
+                ? "error"
+                : webhookProcessed === 0
+                  ? "neutral"
+                  : "ok"
+            }
+            icon={<SafetyCertificateOutlined />}
+            description={webhookStatusLabel[data?.webhookStatus] || "chưa đăng ký"}
+            detail={
+              webhookProcessed === 0 && webhookFailed === 0
+                ? "Chưa nhận webhook nào"
+                : webhookFailed > 0
                   ? `${webhookFailed} webhook lỗi`
                   : `${webhookProcessed} webhook đã xử lý`
-              }
-            />
-          </Col>
-          <Col xs={24} md={8}>
-            <ServiceCard
-              title="Cập nhật"
-              ok={Boolean(data?.lastUpdated)}
-              icon={<HeartOutlined />}
-              description="Lần kiểm tra gần nhất"
-              detail={formatTime(data?.lastUpdated)}
-            />
-          </Col>
-        </Row>
+            }
+          />
+          <ServiceCard
+            title="Hoạt động gần nhất"
+            state={data?.lastUpdated ? "ok" : "neutral"}
+            icon={<HeartOutlined />}
+            description="Webhook xử lý gần nhất hoặc lần cài đặt cuối"
+            detail={formatTime(data?.lastUpdated)}
+          />
+        </div>
       </Card>
 
       <Row gutter={[12, 12]}>
@@ -398,7 +527,9 @@ const OpsPage = () => {
                 title: "Trạng thái",
                 dataIndex: "status",
                 render: (value) => (
-                  <Tag color={statusColor[value] || "default"}>{value}</Tag>
+                  <Tag color={statusColor[value] || "default"}>
+                    {webhookRowStatus[value] || value}
+                  </Tag>
                 ),
               },
               {
@@ -418,8 +549,12 @@ const OpsPage = () => {
         ) : (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Chưa có webhook"
-          />
+            description="Chưa nhận webhook nào từ Sapo"
+          >
+            <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+              Nếu store vừa cài app, hãy đăng ký lại webhook trong Công cụ vận hành ở trên.
+            </Text>
+          </Empty>
         )}
       </Card>
     </AdminLayout>

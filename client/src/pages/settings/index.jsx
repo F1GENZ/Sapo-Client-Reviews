@@ -1,9 +1,9 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect, useId } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import AdminLayout from "../../components/layout/AdminLayout";
 import {
   Input, InputNumber, Switch, ColorPicker, Card, Row, Col, Divider, Typography, Flex, Space,
-  Tag, Button, Spin, Segmented, Tabs, Select, Breadcrumb,
+  Tag, Button, Spin, Segmented, Tabs, Select, Breadcrumb, Modal,
 } from "antd";
 import {
   fetchSpamConfig,
@@ -26,6 +26,16 @@ const { Title, Text } = Typography;
 
 const SettingsSwitch = ({ label, ...props }) => (
   <Switch aria-label={label} size="small" {...props} />
+);
+
+const SwitchRow = ({ label, checked, onChange, hint }) => (
+  <div className="f1g-switch-field">
+    <label className="f1g-switch-row">
+      <Switch size="small" checked={checked} onChange={onChange} />
+      <span className="f1g-switch-row__text">{label}</span>
+    </label>
+    {hint ? <span className="f1g-switch-field__hint">{hint}</span> : null}
+  </div>
 );
 
 const defaultConfig = {
@@ -66,10 +76,12 @@ const defaultConfig = {
   showVerifiedAll: false,
   requireLogin: false,
   requirePurchaseToReview: false,
+  curatedSliderEnabled: true,
+  curatedSliderCount: 15,
 };
 
 const WIDGET_TAB_FIELDS = {
-  display: ["titleText", "showTitle", "showDate", "showFilter", "showSort", "reviewQnaDisplayMode", "reviewLayout", "reviewItemsPerPage", "allowReply", "replyBadgeText"],
+  display: ["titleText", "showTitle", "showDate", "showFilter", "showSort", "reviewQnaDisplayMode", "reviewLayout", "reviewItemsPerPage", "allowReply", "replyBadgeText", "curatedSliderEnabled", "curatedSliderCount"],
   form: ["formContentMode", "formTitleMode", "formEmailMode", "formPhoneMode", "allowImage", "allowVideo", "requireLogin", "requirePurchaseToReview"],
   trust: ["showVerified", "showVerifiedAll", "verifiedColor"],
   qna: ["allowQnA", "qnaDisplayMode", "qnaItemsPerPage"],
@@ -196,6 +208,37 @@ const normalizeColorConfig = (config = {}) =>
     }
     return acc;
   }, { ...config });
+
+const relativeLuminance = (hex) => {
+  const value = normalizeColorValue(hex, "#000000");
+  if (!HEX_COLOR_RE.test(value) || value.length !== 7) return null;
+  const channels = [1, 3, 5].map((offset) => {
+    const channel = parseInt(value.slice(offset, offset + 2), 16) / 255;
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+};
+
+const contrastWithWhite = (hex) => {
+  const luminance = relativeLuminance(hex);
+  if (luminance === null) return null;
+  return 1.05 / (luminance + 0.05);
+};
+
+const readableTextOn = (hex) => {
+  const ratio = contrastWithWhite(hex);
+  return ratio !== null && ratio >= 4.5 ? "#ffffff" : "#1a1a1a";
+};
+
+const ContrastHint = ({ color }) => {
+  const ratio = contrastWithWhite(color);
+  if (ratio === null || ratio >= 4.5) return null;
+  return (
+    <Text className="f1g-contrast-warning">
+      Chữ trắng trên màu này chỉ đạt {ratio.toFixed(2)}:1, dưới ngưỡng đọc tốt 4.5:1. Chọn màu đậm hơn để khách dễ đọc.
+    </Text>
+  );
+};
 const isFieldEqual = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const normalizeLegacyWidgetConfig = (config = {}) => {
   const next = { ...config };
@@ -235,34 +278,40 @@ const getPreviewEmailMode = (config) => {
 };
 
 /* ── Color field component ── */
-const ColorField = ({ label, value, onChange }) => (
-  <div>
-    <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>{label}</Text>
-    <Flex align="center" gap={8}>
-      <Input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={(e) => onChange(normalizeColorValue(e.target.value, value))}
-        style={{ flex: 1 }}
-        size="small"
-      />
-      <ColorPicker
-        value={normalizeColorValue(value, "#000000")}
-        onChange={(color) => onChange(color.toHexString().toLowerCase())}
-        size="small"
-      />
-    </Flex>
-  </div>
-);
+const ColorField = ({ label, value, onChange }) => {
+  const inputId = useId();
+  return (
+    <div>
+      <label htmlFor={inputId} className="f1g-field-label">{label}</label>
+      <Flex align="center" gap={8}>
+        <Input
+          id={inputId}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={(e) => onChange(normalizeColorValue(e.target.value, value))}
+          style={{ flex: 1 }}
+          size="small"
+        />
+        <ColorPicker
+          value={normalizeColorValue(value, "#000000")}
+          onChange={(color) => onChange(color.toHexString().toLowerCase())}
+          size="small"
+          aria-label={`Chọn ${label.toLowerCase()}`}
+        />
+      </Flex>
+    </div>
+  );
+};
 
 /* ══════════════════════════════════
    STOREFRONT PREVIEW
    ══════════════════════════════════ */
-const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
+const StorefrontPreview = ({ config, reviewCount: reviewCountProp, activeTab }) => {
   const previewRadius = getPreviewRadiusScale(config.radius);
   const previewEmailMode = getPreviewEmailMode(config);
   const vars = {
     "--f1g-accent": config.accentColor,
+    "--f1g-on-accent": readableTextOn(config.accentColor),
     "--f1g-star-color": config.starColor,
     "--f1g-star-empty": config.starBgColor,
     "--f1g-text": config.textColor,
@@ -289,6 +338,32 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
   const [previewQnaPage, setPreviewQnaPage] = useState(1);
   const [previewSectionTab, setPreviewSectionTab] = useState("reviews");
   const [previewMasonryColumns, setPreviewMasonryColumns] = useState(3);
+  const previewRef = useRef(null);
+  const lastActiveTabRef = useRef(activeTab);
+
+  useEffect(() => {
+    if (lastActiveTabRef.current === activeTab) return;
+    lastActiveTabRef.current = activeTab;
+    const root = previewRef.current;
+    if (!root) return;
+    const scroller = root.closest(".f1g-settings-preview-card")?.querySelector(".ant-card-body");
+    const scrollToBlock = (selector) => {
+      if (!(scroller instanceof HTMLElement) || scroller.scrollHeight <= scroller.clientHeight) return;
+      const block = root.querySelector(selector);
+      if (!(block instanceof HTMLElement)) return;
+      const offset = block.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      scroller.scrollTop = Math.max(0, offset);
+    };
+    if (activeTab === "qna") {
+      setPreviewSectionTab("qna");
+      requestAnimationFrame(() => scrollToBlock("#f1g-preview-qna-panel"));
+      return;
+    }
+    if (activeTab === "display" || activeTab === "appearance") {
+      setPreviewSectionTab("reviews");
+      scrollToBlock(".f1g-summary");
+    }
+  }, [activeTab]);
 
   const displayReviews = useMemo(() => {
     const items = [];
@@ -451,7 +526,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
   );
 
   return (
-    <div className="f1g-preview" style={vars}>
+    <div className="f1g-preview" style={vars} ref={previewRef} data-active-tab={activeTab}>
       {/* ── STYLE (scoped via .f1g-preview) ── */}
       <style>{`
         .f1g-preview {
@@ -496,10 +571,11 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
         .f1g-preview .f1g-bar-row__track {
           flex: 1; height: 8px; background: var(--f1g-border); border-radius: var(--f1g-radius-xs); overflow: hidden;
         }
+        .f1g-preview .f1g-bar-row__track { display: flex; }
         .f1g-preview .f1g-bar-row__fill {
-          height: 100%; background: var(--f1g-star-color); border-radius: var(--f1g-radius-xs);
+          display: block; height: 100%; background: var(--f1g-star-color); border-radius: var(--f1g-radius-xs);
           width: var(--bar-pct, 0%);
-          animation: f1g-bar-grow 1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+          animation: f1g-bar-grow 0.4s ease-out forwards;
         }
         @keyframes f1g-bar-grow {
           from { width: 0%; }
@@ -514,7 +590,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
           display: inline-flex; align-items: center; justify-content: center;
           min-height: 32px; padding: 0 0.95rem; font-size: 0.75rem; font-weight: 600;
           border-radius: var(--f1g-radius-sm); border: none; cursor: pointer;
-          background: var(--f1g-accent); color: #fff; font-family: inherit;
+          background: var(--f1g-accent); color: var(--f1g-on-accent, #fff); font-family: inherit;
           transition: box-shadow 0.2s, filter 0.2s; white-space: nowrap;
         }
         .f1g-preview .f1g-btn--write:hover { filter: brightness(0.92); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
@@ -536,7 +612,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
           transition: background-color 0.15s, border-color 0.15s, color 0.15s; font-family: inherit; white-space: nowrap;
         }
         .f1g-preview .f1g-pill:hover { border-color: var(--f1g-accent); color: var(--f1g-accent); }
-        .f1g-preview .f1g-pill--active { background: var(--f1g-accent); color: #fff; border-color: var(--f1g-accent); }
+        .f1g-preview .f1g-pill--active { background: var(--f1g-accent); color: var(--f1g-on-accent, #fff); border-color: var(--f1g-accent); }
         .f1g-preview .f1g-select {
           padding: 0.3rem 0.5rem; font-size: 0.75rem; border: 1px solid var(--f1g-border);
           border-radius: var(--f1g-radius-sm); background: var(--f1g-bg); color: var(--f1g-text);
@@ -656,7 +732,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
         }
         .f1g-preview .f1g-pagination__btn:disabled { opacity: 0.45; cursor: not-allowed; }
         .f1g-preview .f1g-pagination__btn--active {
-          border-color: var(--f1g-accent); background: var(--f1g-accent); color: #fff;
+          border-color: var(--f1g-accent); background: var(--f1g-accent); color: var(--f1g-on-accent, #fff);
         }
 
         /* Performance stats bar */
@@ -671,13 +747,13 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
 
         /* Tabs */
         .f1g-preview .f1g-tabs {
-          display: flex; gap: 0; border-bottom: 2px solid var(--f1g-border); margin-bottom: 1.25rem;
-          min-width: 0; overflow-x: auto;
+          display: flex; gap: 0; box-shadow: inset 0 -2px var(--f1g-border); margin-bottom: 1.25rem;
+          min-width: 0; overflow-x: auto; overflow-y: hidden;
         }
         .f1g-preview .f1g-tab {
           min-height: 40px; padding: 0.5rem 1rem; font-size: 0.8rem; font-weight: 600;
           color: var(--f1g-text-muted); background: none; border: none;
-          border-bottom: 2px solid transparent; margin-bottom: -2px;
+          border-bottom: 2px solid transparent;
           cursor: pointer; transition: border-color 0.2s, color 0.2s; font-family: inherit;
           white-space: nowrap;
         }
@@ -744,7 +820,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
           width: auto; display: inline-flex; align-items: center; justify-content: center;
           padding: 0.6rem 1.25rem; font-size: 0.85rem; font-weight: 600;
           border-radius: var(--f1g-radius-sm); border: none; cursor: pointer;
-          background: var(--f1g-accent); color: #fff; font-family: inherit;
+          background: var(--f1g-accent); color: var(--f1g-on-accent, #fff); font-family: inherit;
           margin: 0; transition: filter 0.2s;
         }
         .f1g-preview .f1g-btn--ask:hover { filter: brightness(0.92); }
@@ -835,7 +911,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp }) => {
         .f1g-preview .f1g-form-preview__submit {
           border: 1px solid var(--f1g-accent);
           background: var(--f1g-accent);
-          color: #fff;
+          color: var(--f1g-on-accent, #fff);
         }
         .f1g-preview .f1g-form-preview__cancel {
           border: 1px solid var(--f1g-border);
@@ -1100,6 +1176,7 @@ const SettingsPage = () => {
   const [localConfig, setLocalConfig] = useState(null); // null = not yet initialized
   const u = (key, value) => setLocalConfig((prev) => ({ ...(prev ?? defaultConfig), [key]: value }));
   const [activeTabKey, setActiveTabKey] = useState("display");
+  const tabsRef = useRef(null);
 
   /* ── Widget config: load from server ── */
   const queryClient = useQueryClient();
@@ -1152,10 +1229,27 @@ const SettingsPage = () => {
   });
 
   const handleRestoreDefault = useCallback(() => {
-    const confirmed = window.confirm("Khôi phục toàn bộ cấu hình widget về mặc định và lưu ngay?");
-    if (!confirmed) return;
-    widgetMutation.mutate({ ...defaultConfig });
-  }, [widgetMutation]);
+    Modal.confirm({
+      title: "Khôi phục toàn bộ về mặc định?",
+      content: (
+        <div>
+          <p style={{ marginTop: 0 }}>Áp dụng cho toàn bộ 6 tab cấu hình widget và phần chống spam:</p>
+          <ul style={{ paddingLeft: 20, margin: "0 0 8px" }}>
+            <li>Hiển thị, Form gửi, Tin cậy, Hỏi đáp, Duyệt &amp; Spam, Giao diện</li>
+            <li>Độ dài nội dung tối đa và danh sách từ khoá bị chặn</li>
+          </ul>
+          <p style={{ margin: 0 }}>Thay đổi chỉ có hiệu lực sau khi bấm “Lưu thay đổi”.</p>
+        </div>
+      ),
+      okText: "Đưa về mặc định",
+      cancelText: "Hủy",
+      okButtonProps: { danger: true },
+      onOk: () => {
+        setLocalConfig({ ...defaultConfig });
+        setSpamDraft({});
+      },
+    });
+  }, []);
 
   /* ── Spam config ── */
   const { data: spamConfig, isLoading: spamLoading } = useQuery({
@@ -1212,53 +1306,19 @@ const SettingsPage = () => {
     [widgetTabDirtyMap, isSpamDirty]
   );
 
-  const discardTabChanges = useCallback((tabKey) => {
-    if (tabKey === "moderation") {
-      setSpamDraft(null);
-    }
-
-    const fields = WIDGET_TAB_FIELDS[tabKey];
-    if (!fields?.length) return;
-
-    setLocalConfig((prev) => {
-      const next = { ...(prev ?? defaultConfig) };
-      fields.forEach((field) => {
-        next[field] = normalizedSavedWidgetConfig[field];
-      });
-      return next;
-    });
-  }, [normalizedSavedWidgetConfig]);
+  const isDirty = isWidgetDirty || isSpamDirty;
 
   const handleTabChange = useCallback((nextKey) => {
-    if (nextKey === activeTabKey) return;
-
-    if (tabDirtyMap[activeTabKey]) {
-      const shouldDiscard = window.confirm("Tab hiện tại có thay đổi chưa lưu. Bỏ thay đổi và chuyển tab?");
-      if (!shouldDiscard) return;
-      discardTabChanges(activeTabKey);
-    }
-
     setActiveTabKey(nextKey);
-  }, [activeTabKey, discardTabChanges, tabDirtyMap]);
+    requestAnimationFrame(() => {
+      const holder = tabsRef.current?.querySelector(".ant-tabs-content-holder");
+      if (holder) holder.scrollTop = 0;
+    });
+  }, []);
 
-  const renderWidgetSaveButton = useCallback((tabKey) => (
-    <Button
-      type="primary"
-      loading={widgetMutation.isPending}
-      disabled={!config || widgetMutation.isPending || !tabDirtyMap[tabKey]}
-      onClick={() => {
-        if (config && tabDirtyMap[tabKey]) {
-          widgetMutation.mutate(normalizedWidgetConfig);
-        }
-      }}
-    >
-      {tabDirtyMap[tabKey] ? TAB_SAVE_LABELS[tabKey] : "Chưa có thay đổi"}
-    </Button>
-  ), [config, normalizedWidgetConfig, tabDirtyMap, widgetMutation]);
-
-  const handleSaveModeration = useCallback(async () => {
+  const handleSave = useCallback(async () => {
     const tasks = [];
-    if (config && widgetTabDirtyMap.moderation) {
+    if (isWidgetDirty) {
       tasks.push(widgetMutation.mutateAsync(normalizedWidgetConfig));
     }
     if (isSpamDirty) {
@@ -1270,49 +1330,41 @@ const SettingsPage = () => {
     } catch {
       // Mutation handlers already show the actionable error message.
     }
-  }, [
-    config,
-    isSpamDirty,
-    normalizedWidgetConfig,
-    spam,
-    spamMutation,
-    widgetMutation,
-    widgetTabDirtyMap.moderation,
-  ]);
+  }, [isSpamDirty, isWidgetDirty, normalizedWidgetConfig, spam, spamMutation, widgetMutation]);
 
-  const renderModerationSaveButton = useCallback(() => {
-    const saving = widgetMutation.isPending || spamMutation.isPending;
-    return (
-    <Button
-      type="primary"
-      loading={saving}
-      disabled={!tabDirtyMap.moderation || saving}
-      onClick={() => void handleSaveModeration()}
-    >
-      {tabDirtyMap.moderation ? TAB_SAVE_LABELS.moderation : "Chưa có thay đổi"}
-    </Button>
-    );
-  }, [
-    handleSaveModeration,
-    spamMutation.isPending,
-    tabDirtyMap.moderation,
-    widgetMutation.isPending,
-  ]);
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [isDirty]);
+
+  const saving = widgetMutation.isPending || spamMutation.isPending;
+  const tabLabel = useCallback((key, label) => (
+    <span className="f1g-tab-label">
+      {label}
+      {tabDirtyMap[key] ? <span className="f1g-tab-dot" aria-label="Có thay đổi chưa lưu" /> : null}
+    </span>
+  ), [tabDirtyMap]);
 
   const settingsTabItems = [
     {
       key: "display",
-      label: "Hiển thị",
+      label: tabLabel("display", "Hiển thị"),
       icon: <UnorderedListOutlined />,
       children: (
         <>
           <Flex vertical gap={14}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               Quản lý cách danh sách đánh giá xuất hiện trên trang sản phẩm.
             </Text>
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Tiêu đề widget</Text>
+              <label htmlFor="f1g-title-text" className="f1g-field-label">Tiêu đề widget</label>
               <Input
+                id="f1g-title-text"
                 value={formConfig.titleText}
                 onChange={(e) => u("titleText", e.target.value)}
                 size="small"
@@ -1321,27 +1373,16 @@ const SettingsPage = () => {
             <Divider style={{ margin: "2px 0" }} />
             <Flex vertical gap={10}>
               <Text strong style={{ fontSize: 13 }}>Thông tin trong từng đánh giá</Text>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Hiển thị tiêu đề đánh giá" checked={formConfig.showTitle} onChange={(v) => u("showTitle", v)} />
-                <Text style={{ fontSize: 13 }}>Hiển thị tiêu đề đánh giá</Text>
-              </Flex>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Hiển thị thời gian đánh giá" checked={formConfig.showDate} onChange={(v) => u("showDate", v)} />
-                <Text style={{ fontSize: 13 }}>Hiển thị thời gian đánh giá</Text>
-              </Flex>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Hiển thị bộ lọc đánh giá" checked={formConfig.showFilter} onChange={(v) => u("showFilter", v)} />
-                <Text style={{ fontSize: 13 }}>Hiển thị bộ lọc đánh giá</Text>
-              </Flex>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Hiển thị sắp xếp đánh giá" checked={formConfig.showSort} onChange={(v) => u("showSort", v)} />
-                <Text style={{ fontSize: 13 }}>Hiển thị sắp xếp đánh giá</Text>
-              </Flex>
+              <SwitchRow label="Hiển thị tiêu đề đánh giá" checked={formConfig.showTitle} onChange={(v) => u("showTitle", v)} />
+              <SwitchRow label="Hiển thị thời gian đánh giá" checked={formConfig.showDate} onChange={(v) => u("showDate", v)} />
+              <SwitchRow label="Hiển thị bộ lọc đánh giá" checked={formConfig.showFilter} onChange={(v) => u("showFilter", v)} />
+              <SwitchRow label="Hiển thị sắp xếp đánh giá" checked={formConfig.showSort} onChange={(v) => u("showSort", v)} />
             </Flex>
             <Divider style={{ margin: "2px 0" }} />
             <div>
               <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Bố cục Review & Hỏi đáp</Text>
               <Segmented
+                aria-label="Bố cục Review và Hỏi đáp"
                 value={formConfig.reviewQnaDisplayMode}
                 onChange={(v) => u("reviewQnaDisplayMode", v)}
                 size="small"
@@ -1350,26 +1391,29 @@ const SettingsPage = () => {
                   { value: "tabs", label: "2 tab" },
                 ]}
               />
-              <Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 11 }}>
+              <Text type="secondary" style={{ display: "block", marginTop: 6, fontSize: 12 }}>
                 Chế độ 2 tab áp dụng cho snippet tổng <Text code>{"<f1genz-reviews>"}</Text>.
               </Text>
             </div>
             <div>
               <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Kiểu danh sách đánh giá</Text>
               <Segmented
+                aria-label="Kiểu danh sách đánh giá"
                 value={formConfig.reviewLayout}
                 onChange={(v) => u("reviewLayout", v)}
                 size="small"
                 options={[
-                  { value: "list", icon: <UnorderedListOutlined />, label: "List" },
-                  { value: "grid", icon: <AppstoreOutlined />, label: "Grid" },
-                  { value: "masonry", label: "Masonry" },
+                  { value: "list", icon: <UnorderedListOutlined />, label: "Danh sách" },
+                  { value: "grid", icon: <AppstoreOutlined />, label: "Lưới" },
+                  { value: "masonry", label: "Xếp gạch" },
                 ]}
               />
             </div>
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Số đánh giá mỗi trang</Text>
+              <label htmlFor="f1g-review-page-size" className="f1g-field-label">Số đánh giá mỗi trang</label>
               <InputNumber
+                id="f1g-review-page-size"
+                aria-label="Số đánh giá mỗi trang"
                 min={1}
                 max={50}
                 size="small"
@@ -1381,17 +1425,45 @@ const SettingsPage = () => {
             <Divider style={{ margin: "2px 0" }} />
             <Flex vertical gap={10}>
               <Flex vertical gap={2}>
+                <Text strong style={{ fontSize: 13 }}>Dải đánh giá nổi bật (slider)</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Hiển thị ở phần tử <Text code>{"<f1genz-curated-slider>"}</Text> nếu theme đã gắn phần tử này.
+                </Text>
+              </Flex>
+              <SwitchRow
+                label="Bật dải đánh giá nổi bật"
+                checked={formConfig.curatedSliderEnabled !== false}
+                onChange={(v) => u("curatedSliderEnabled", v)}
+              />
+              {formConfig.curatedSliderEnabled !== false && (
+                <div>
+                  <label htmlFor="f1g-slider-count" className="f1g-field-label">Số đánh giá trong dải (5–15)</label>
+                  <InputNumber
+                    id="f1g-slider-count"
+                    aria-label="Số đánh giá trong dải nổi bật"
+                    min={5}
+                    max={15}
+                    precision={0}
+                    size="small"
+                    style={{ width: "100%" }}
+                    value={formConfig.curatedSliderCount ?? 15}
+                    onChange={(v) => u("curatedSliderCount", v ?? 15)}
+                  />
+                </div>
+              )}
+            </Flex>
+            <Divider style={{ margin: "2px 0" }} />
+            <Flex vertical gap={10}>
+              <Flex vertical gap={2}>
                 <Text strong style={{ fontSize: 13 }}>Phản hồi của shop</Text>
-                <Text type="secondary" style={{ fontSize: 11 }}>Điều khiển phần trả lời hiển thị dưới review.</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>Điều khiển phần trả lời hiển thị dưới review.</Text>
               </Flex>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Hiển thị phản hồi của shop" checked={formConfig.allowReply} onChange={(v) => u("allowReply", v)} />
-                <Text style={{ fontSize: 13 }}>Hiển thị phản hồi của shop</Text>
-              </Flex>
+              <SwitchRow label="Hiển thị phản hồi của shop" checked={formConfig.allowReply} onChange={(v) => u("allowReply", v)} />
               {formConfig.allowReply && (
                 <div>
-                  <Text strong style={{ fontSize: 13, display: "block", marginBottom: 4 }}>Nhãn phản hồi</Text>
+                  <label htmlFor="f1g-reply-badge-text" className="f1g-field-label">Nhãn phản hồi</label>
                   <Input
+                    id="f1g-reply-badge-text"
                     value={formConfig.replyBadgeText}
                     onChange={(e) => u("replyBadgeText", e.target.value)}
                     size="small"
@@ -1408,19 +1480,21 @@ const SettingsPage = () => {
     },
     {
       key: "form",
-      label: "Form gửi",
+      label: tabLabel("form", "Form gửi"),
       icon: <FormOutlined />,
       children: (
         <>
           <Flex vertical gap={14}>
-            <Text type="secondary" style={{ fontSize: 11 }}>Cấu hình form khách dùng để gửi đánh giá trên storefront.</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>Cấu hình form khách dùng để gửi đánh giá trên storefront.</Text>
             <Flex vertical gap={2}>
               <Text strong style={{ fontSize: 13 }}>Trường nội dung review</Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>Tên khách và số sao luôn bắt buộc.</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>Tên khách và số sao luôn bắt buộc.</Text>
             </Flex>
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Trường tiêu đề</Text>
+              <label htmlFor="f1g-form-title-mode" className="f1g-field-label">Trường tiêu đề</label>
               <Select
+                id="f1g-form-title-mode"
+                aria-label="Trường tiêu đề"
                 value={formConfig.formTitleMode}
                 onChange={(v) => u("formTitleMode", v)}
                 size="small"
@@ -1433,8 +1507,10 @@ const SettingsPage = () => {
               />
             </div>
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Trường nội dung</Text>
+              <label htmlFor="f1g-form-content-mode" className="f1g-field-label">Trường nội dung</label>
               <Select
+                id="f1g-form-content-mode"
+                aria-label="Trường nội dung"
                 value={formConfig.formContentMode}
                 onChange={(v) => u("formContentMode", v)}
                 size="small"
@@ -1447,8 +1523,10 @@ const SettingsPage = () => {
               />
             </div>
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Trường email</Text>
+              <label htmlFor="f1g-form-email-mode" className="f1g-field-label">Trường email</label>
               <Select
+                id="f1g-form-email-mode"
+                aria-label="Trường email"
                 value={formConfig.formEmailMode}
                 onChange={(v) => u("formEmailMode", v)}
                 size="small"
@@ -1461,8 +1539,10 @@ const SettingsPage = () => {
               />
             </div>
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Trường số điện thoại</Text>
+              <label htmlFor="f1g-form-phone-mode" className="f1g-field-label">Trường số điện thoại</label>
               <Select
+                id="f1g-form-phone-mode"
+                aria-label="Trường số điện thoại"
                 value={formConfig.formPhoneMode}
                 onChange={(v) => u("formPhoneMode", v)}
                 size="small"
@@ -1477,34 +1557,24 @@ const SettingsPage = () => {
             <Divider style={{ margin: "2px 0" }} />
             <Flex vertical gap={10}>
               <Text strong style={{ fontSize: 13 }}>Media đính kèm</Text>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Cho phép hình ảnh đánh giá" checked={formConfig.allowImage} onChange={(v) => u("allowImage", v)} />
-                <Text style={{ fontSize: 13 }}>Cho phép hình ảnh đánh giá</Text>
-              </Flex>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Cho phép video đánh giá" checked={formConfig.allowVideo} onChange={(v) => u("allowVideo", v)} />
-                <Text style={{ fontSize: 13 }}>Cho phép video đánh giá</Text>
-              </Flex>
+              <SwitchRow label="Cho phép hình ảnh đánh giá" checked={formConfig.allowImage} onChange={(v) => u("allowImage", v)} />
+              <SwitchRow label="Cho phép video đánh giá" checked={formConfig.allowVideo} onChange={(v) => u("allowVideo", v)} />
             </Flex>
             <Divider style={{ margin: "2px 0" }} />
             <Flex vertical gap={10}>
               <Text strong style={{ fontSize: 13 }}>Điều kiện gửi đánh giá</Text>
-              <Flex vertical gap={2}>
-                <Flex align="center" gap={10}>
-                  <SettingsSwitch label="Bắt buộc đăng nhập để đánh giá" checked={formConfig.requireLogin} onChange={(v) => u("requireLogin", v)} />
-                  <Text style={{ fontSize: 13 }}>Bắt buộc đăng nhập để đánh giá</Text>
-                </Flex>
-                <Text type="secondary" style={{ fontSize: 11 }}>Khách chưa đăng nhập sẽ thấy CTA đăng nhập trước khi mở form.</Text>
-              </Flex>
-              <Flex align="flex-start" gap={10}>
-                <SettingsSwitch label="Chỉ khách đã mua hàng mới được đánh giá" checked={formConfig.requirePurchaseToReview} onChange={(v) => u("requirePurchaseToReview", v)} />
-                <div>
-                  <Text style={{ fontSize: 13, display: "block" }}>Chỉ khách đã mua hàng mới được đánh giá</Text>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Xác minh bằng email hoặc số điện thoại trong dữ liệu đơn hàng.
-                  </Text>
-                </div>
-              </Flex>
+              <SwitchRow
+                label="Bắt buộc đăng nhập để đánh giá"
+                checked={formConfig.requireLogin}
+                onChange={(v) => u("requireLogin", v)}
+                hint="Khách chưa đăng nhập sẽ thấy CTA đăng nhập trước khi mở form."
+              />
+              <SwitchRow
+                label="Chỉ khách đã mua hàng mới được đánh giá"
+                checked={formConfig.requirePurchaseToReview}
+                onChange={(v) => u("requirePurchaseToReview", v)}
+                hint="Xác minh bằng email hoặc số điện thoại trong dữ liệu đơn hàng."
+              />
               {formConfig.requirePurchaseToReview && (
                 <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: 10 }}>
                   <Text style={{ display: "block", fontSize: 12, color: "#9a3412" }}>
@@ -1519,30 +1589,27 @@ const SettingsPage = () => {
     },
     {
       key: "trust",
-      label: "Tin cậy",
+      label: tabLabel("trust", "Tin cậy"),
       icon: <SafetyOutlined />,
       children: (
         <>
           <Flex vertical gap={14}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               Quản lý các tín hiệu giúp khách hiểu review nào đến từ người đã mua hàng.
             </Text>
             <Flex vertical gap={2}>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Hiển thị badge Đã mua hàng" checked={formConfig.showVerified} onChange={(v) => u("showVerified", v)} />
-                <Text style={{ fontSize: 13 }}>Hiển thị badge “Đã mua hàng”</Text>
-              </Flex>
-              <Text type="secondary" style={{ fontSize: 11 }}>Badge chỉ hiển thị cho review có trạng thái verified.</Text>
+              <SwitchRow label="Hiển thị badge “Đã mua hàng”" checked={formConfig.showVerified} onChange={(v) => u("showVerified", v)} />
+              <Text type="secondary" style={{ fontSize: 12 }}>Badge chỉ hiển thị cho review có trạng thái verified.</Text>
             </Flex>
             {formConfig.showVerified && (
               <>
-                <ColorField label="Màu badge “Đã mua hàng”" value={formConfig.verifiedColor} onChange={(v) => u("verifiedColor", v)} />
+                <div className="f1g-color-field-group">
+                  <ColorField label="Màu badge “Đã mua hàng”" value={formConfig.verifiedColor} onChange={(v) => u("verifiedColor", v)} />
+                  <ContrastHint color={formConfig.verifiedColor} />
+                </div>
                 <Flex vertical gap={2}>
-                  <Flex align="center" gap={10}>
-                    <SettingsSwitch label="Hiển thị badge cho mọi đánh giá" checked={formConfig.showVerifiedAll} onChange={(v) => u("showVerifiedAll", v)} />
-                    <Text style={{ fontSize: 13 }}>Hiển thị badge cho mọi đánh giá</Text>
-                  </Flex>
-                  <Text type="secondary" style={{ fontSize: 11, color: "#b45309" }}>
+                  <SwitchRow label="Hiển thị badge cho mọi đánh giá" checked={formConfig.showVerifiedAll} onChange={(v) => u("showVerifiedAll", v)} />
+                  <Text type="secondary" style={{ fontSize: 12, color: "#b45309" }}>
                     Không khuyến nghị bật ngoài dữ liệu demo, vì khách có thể hiểu mọi review đều đã được xác minh mua hàng.
                   </Text>
                 </Flex>
@@ -1554,35 +1621,35 @@ const SettingsPage = () => {
     },
     {
       key: "qna",
-      label: "Hỏi đáp",
+      label: tabLabel("qna", "Hỏi đáp"),
       icon: <QuestionCircleOutlined />,
       children: (
         <>
           <Flex vertical gap={14}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               Cấu hình khối hỏi đáp sản phẩm hiển thị bên cạnh review.
             </Text>
-            <Flex align="center" gap={10}>
-              <SettingsSwitch label="Cho phép hỏi đáp sản phẩm" checked={formConfig.allowQnA} onChange={(v) => u("allowQnA", v)} />
-              <Text style={{ fontSize: 13 }}>Cho phép hỏi đáp sản phẩm</Text>
-            </Flex>
+            <SwitchRow label="Cho phép hỏi đáp sản phẩm" checked={formConfig.allowQnA} onChange={(v) => u("allowQnA", v)} />
             {formConfig.allowQnA && (
               <>
                 <div>
                   <Text strong style={{ fontSize: 12, display: "block", marginBottom: 6 }}>Kiểu hiển thị</Text>
                   <Segmented
+                    aria-label="Kiểu hiển thị hỏi đáp"
                     value={formConfig.qnaDisplayMode}
                     onChange={(v) => u("qnaDisplayMode", v)}
                     size="small"
                     options={[
-                      { value: "list", icon: <UnorderedListOutlined />, label: "List" },
-                      { value: "grid", icon: <AppstoreOutlined />, label: "Grid" },
+                      { value: "list", icon: <UnorderedListOutlined />, label: "Danh sách" },
+                      { value: "grid", icon: <AppstoreOutlined />, label: "Lưới" },
                     ]}
                   />
                 </div>
                 <div>
-                  <Text strong style={{ fontSize: 12, display: "block", marginBottom: 6 }}>Số câu hỏi mỗi trang</Text>
+                  <label htmlFor="f1g-qna-page-size" className="f1g-field-label">Số câu hỏi mỗi trang</label>
                   <InputNumber
+                    id="f1g-qna-page-size"
+                    aria-label="Số câu hỏi mỗi trang"
                     min={1}
                     max={50}
                     size="small"
@@ -1599,21 +1666,18 @@ const SettingsPage = () => {
     },
     {
       key: "moderation",
-      label: "Duyệt & Spam",
+      label: tabLabel("moderation", "Duyệt & Spam"),
       icon: <FileTextOutlined />,
       children: (
         <>
           <Flex vertical gap={14}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               Điều khiển trạng thái review mới và các luật chống spam.
             </Text>
             <Flex vertical gap={2}>
               <Text strong style={{ fontSize: 13 }}>Duyệt đánh giá</Text>
-              <Flex align="center" gap={10}>
-                <SettingsSwitch label="Tự động duyệt review mới từ storefront" checked={formConfig.autoApprove} onChange={(v) => u("autoApprove", v)} />
-                <Text style={{ fontSize: 13 }}>Tự động duyệt review mới từ storefront</Text>
-              </Flex>
-              <Text type="secondary" style={{ fontSize: 11 }}>
+              <SwitchRow label="Tự động duyệt review mới từ storefront" checked={formConfig.autoApprove} onChange={(v) => u("autoApprove", v)} />
+              <Text type="secondary" style={{ fontSize: 12 }}>
                 Tắt để review mới vào trạng thái chờ duyệt trước khi hiển thị công khai.
               </Text>
             </Flex>
@@ -1624,26 +1688,26 @@ const SettingsPage = () => {
               <>
                 <Flex vertical gap={10}>
                   <Text strong style={{ fontSize: 13 }}>Luật chống spam</Text>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
                     Review chứa từ khoá bị chặn, vượt độ dài tối đa hoặc trùng nội dung cũ của cùng tác giả sẽ vào mục Spam.
                   </Text>
                   <div>
-                    <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Độ dài nội dung tối đa</Text>
+                    <label htmlFor="f1g-spam-max-length" className="f1g-field-label">Độ dài nội dung tối đa</label>
                     <Space.Compact style={{ width: "100%" }}>
-                      <InputNumber value={spam.maxContentLength ?? 5000} onChange={(v) => us("maxContentLength", v ?? 5000)} min={1} max={5000} precision={0} size="small" style={{ width: "100%" }} />
+                      <InputNumber id="f1g-spam-max-length" aria-label="Độ dài nội dung tối đa" value={spam.maxContentLength ?? 5000} onChange={(v) => us("maxContentLength", v ?? 5000)} min={1} max={5000} precision={0} size="small" style={{ width: "100%" }} />
                       <Button size="small" disabled style={{ width: 58 }}>ký tự</Button>
                     </Space.Compact>
                   </div>
                 </Flex>
                 <Divider style={{ margin: "4px 0" }} />
                 <div>
-                  <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Từ khoá bị chặn</Text>
+                  <label htmlFor="f1g-spam-blocked-word" className="f1g-field-label">Từ khoá bị chặn</label>
                   <Flex wrap="wrap" gap={4} style={{ marginBottom: 6 }}>
                     {(spam.blockedWords || []).map((w) => (
                       <Tag key={w} closable onClose={() => removeBlockedWord(w)} style={{ margin: 0 }}>{w}</Tag>
                     ))}
                   </Flex>
-                  <Input size="small" placeholder="Nhập từ khoá rồi Enter" value={blockedWordInput} onChange={(e) => setBlockedWordInput(e.target.value)} onPressEnter={addBlockedWord} />
+                  <Input id="f1g-spam-blocked-word" aria-label="Thêm từ khoá bị chặn" size="small" placeholder="Nhập từ khoá rồi Enter" value={blockedWordInput} onChange={(e) => setBlockedWordInput(e.target.value)} onPressEnter={addBlockedWord} />
                 </div>
               </>
             )}
@@ -1653,17 +1717,18 @@ const SettingsPage = () => {
     },
     {
       key: "appearance",
-      label: "Giao diện",
+      label: tabLabel("appearance", "Giao diện"),
       icon: <BgColorsOutlined />,
       children: (
         <>
           <Flex vertical gap={14}>
-            <Text type="secondary" style={{ fontSize: 11 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               Tùy chỉnh màu sắc, bo góc và style nền của widget.
             </Text>
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Hình ngôi sao (URL)</Text>
+              <label htmlFor="f1g-star-icon-url" className="f1g-field-label">Hình ngôi sao (URL)</label>
               <Input
+                id="f1g-star-icon-url"
                 value={formConfig.starIconUrl || ""}
                 onChange={(e) => u("starIconUrl", e.target.value)}
                 placeholder="https://… (để trống dùng icon mặc định)"
@@ -1675,30 +1740,33 @@ const SettingsPage = () => {
                   {[1,2,3,4,5].map((i) => (
                     <img key={i} src={formConfig.starIconUrl} alt="" width={18} height={18} style={{ objectFit: "contain", opacity: i <= 4 ? 1 : 0.25 }} />
                   ))}
-                  <Text type="secondary" style={{ fontSize: 11 }}>Xem trước</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Xem trước</Text>
                 </Flex>
               )}
             </div>
             <ColorField label="Màu icon sao" value={formConfig.starColor} onChange={(v) => u("starColor", v)} />
             <ColorField label="Màu sao chưa chọn" value={formConfig.starBgColor} onChange={(v) => u("starBgColor", v)} />
             <Divider style={{ margin: "2px 0" }} />
-            <ColorField label="Màu chủ đạo" value={formConfig.accentColor} onChange={(v) => u("accentColor", v)} />
+            <div className="f1g-color-field-group">
+              <ColorField label="Màu chủ đạo" value={formConfig.accentColor} onChange={(v) => u("accentColor", v)} />
+              <ContrastHint color={formConfig.accentColor} />
+            </div>
             <ColorField label="Màu chữ" value={formConfig.textColor} onChange={(v) => u("textColor", v)} />
             <ColorField label="Màu chữ phụ" value={formConfig.mutedColor} onChange={(v) => u("mutedColor", v)} />
             <ColorField label="Nền chính" value={formConfig.bgColor} onChange={(v) => u("bgColor", v)} />
             <ColorField label="Nền phụ" value={formConfig.bgAltColor} onChange={(v) => u("bgAltColor", v)} />
             <ColorField label="Viền" value={formConfig.borderColor} onChange={(v) => u("borderColor", v)} />
             <div>
-              <Text strong style={{ fontSize: 13, display: "block", marginBottom: 6 }}>Bo góc</Text>
+              <label htmlFor="f1g-radius" className="f1g-field-label">Bo góc</label>
               <Space.Compact style={{ width: "100%" }}>
-                <InputNumber value={formConfig.radius} onChange={(v) => u("radius", v ?? 12)} min={0} max={99} size="small" style={{ width: "100%" }} />
+                <InputNumber id="f1g-radius" aria-label="Bo góc" value={formConfig.radius} onChange={(v) => u("radius", v ?? 12)} min={0} max={99} size="small" style={{ width: "100%" }} />
                 <Button size="small" disabled style={{ width: 44 }}>px</Button>
               </Space.Compact>
             </div>
             <Divider style={{ margin: "2px 0" }} />
             <Flex vertical gap={2}>
               <Text strong style={{ fontSize: 13 }}>Màu phản hồi của shop</Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>Dùng cho khối phản hồi đánh giá và câu trả lời hỏi đáp trên storefront.</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>Dùng cho khối phản hồi đánh giá và câu trả lời hỏi đáp trên storefront.</Text>
             </Flex>
             <ColorField label="Màu nền phản hồi" value={formConfig.replyBgColor} onChange={(v) => u("replyBgColor", v)} />
             <ColorField label="Màu viền trái phản hồi" value={formConfig.replyBorderColor} onChange={(v) => u("replyBorderColor", v)} />
@@ -1796,16 +1864,93 @@ const SettingsPage = () => {
         .f1g-settings-tabs-scroll .ant-tabs-tabpane {
           min-height: 0;
         }
-        .f1g-settings-topbar {
+        .f1g-settings-footer {
           flex-shrink: 0;
           display: flex;
           align-items: center;
-          justify-content: flex-end;
+          justify-content: space-between;
           flex-wrap: wrap;
           gap: 12px;
-          padding: 12px 0 8px;
+          padding: 12px 0;
           background: #fff;
-          border-bottom: 1px solid #f0f0f0;
+          border-top: 1px solid #f0f0f0;
+        }
+        .f1g-settings-footer__status {
+          font-size: 12px;
+          color: #475569;
+        }
+        .f1g-settings-footer__status--dirty {
+          color: #b45309;
+          font-weight: 600;
+        }
+        .f1g-settings-footer__actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-left: auto;
+        }
+        .f1g-settings-footer .ant-btn {
+          height: 32px;
+        }
+        .f1g-field-label {
+          display: block;
+          font-size: 13px;
+          font-weight: 600;
+          margin-bottom: 6px;
+        }
+        .f1g-switch-field {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .f1g-switch-row {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          min-height: 24px;
+          cursor: pointer;
+        }
+        .f1g-switch-row__text {
+          font-size: 13px;
+        }
+        .f1g-switch-field__hint {
+          font-size: 12px;
+          color: #64748b;
+        }
+        .f1g-color-field-group {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .f1g-contrast-warning {
+          font-size: 12px;
+          color: #b45309;
+        }
+        .f1g-tab-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .f1g-preview-title {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .f1g-tab-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #d97706;
+          flex-shrink: 0;
+        }
+        .f1g-settings-tabs-scroll .ant-tabs-content-holder {
+          overscroll-behavior: contain;
+        }
+        @media (max-width: 1199px) {
+          .f1g-settings-tabs-scroll .ant-tabs-tab .anticon {
+            display: none;
+          }
         }
         .f1g-settings-preview-card {
           display: flex;
@@ -1820,32 +1965,47 @@ const SettingsPage = () => {
           overflow-y: auto;
           overflow-x: hidden;
         }
-        .f1g-settings-savebar {
-          min-width: 150px;
-        }
         @media (max-width: 991px) {
           .f1g-settings-page {
-            height: calc(100svh - 76px);
+            height: auto;
+            overflow: visible;
           }
           .f1g-settings-workspace {
-            overflow-y: auto;
-            overflow-x: hidden;
+            overflow: visible;
           }
           .f1g-settings-col--config,
           .f1g-settings-col--preview {
-            height: min(680px, calc(100svh - 120px));
+            height: auto;
+          }
+          .f1g-settings-card .ant-card-body,
+          .f1g-settings-card,
+          .f1g-settings-col--config .ant-spin-nested-loading,
+          .f1g-settings-col--config .ant-spin-container {
+            height: auto;
+          }
+          .f1g-settings-tabs-scroll {
+            overflow: visible;
+          }
+          .f1g-settings-tabs-scroll .ant-tabs-content-holder {
+            overflow: visible;
+            padding-right: 0;
+          }
+          .f1g-settings-footer {
+            position: sticky;
+            bottom: 0;
+            z-index: 3;
           }
           .f1g-settings-col--preview {
             margin-top: 16px;
           }
         }
         @media (max-width: 575px) {
-          .f1g-settings-topbar {
-            justify-content: stretch;
-          }
-          .f1g-settings-savebar,
-          .f1g-settings-savebar .ant-btn {
+          .f1g-settings-footer__actions {
             width: 100%;
+            margin-left: 0;
+          }
+          .f1g-settings-footer__actions .ant-btn {
+            flex: 1;
           }
         }
       `}</style>
@@ -1868,25 +2028,36 @@ const SettingsPage = () => {
             className="f1g-settings-card"
             style={{ borderRadius: 12, border: "none", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}
           >
-            <div className="f1g-settings-topbar">
-              <Button
-                size="small"
-                disabled={widgetMutation.isPending}
-                onClick={handleRestoreDefault}
-              >
-                Khôi phục mặc định
-              </Button>
-              <div className="f1g-settings-savebar">
-                {activeTabKey === "moderation" ? renderModerationSaveButton() : renderWidgetSaveButton(activeTabKey)}
-              </div>
-            </div>
-            <div className="f1g-settings-tabs-scroll">
+            <div className="f1g-settings-tabs-scroll" ref={tabsRef}>
             <Tabs
               activeKey={activeTabKey}
               size="small"
               onChange={handleTabChange}
+              tabBarGutter={16}
               items={settingsTabItems}
+              more={{ icon: <span aria-hidden="true">…</span> }}
             />
+            </div>
+            <div className="f1g-settings-footer">
+              <span className={`f1g-settings-footer__status${isDirty ? " f1g-settings-footer__status--dirty" : ""}`}>
+                {isDirty ? "Có thay đổi chưa lưu" : "Chưa có thay đổi"}
+              </span>
+              <div className="f1g-settings-footer__actions">
+                <Button
+                  disabled={saving}
+                  onClick={handleRestoreDefault}
+                >
+                  Khôi phục toàn bộ mặc định
+                </Button>
+                <Button
+                  type="primary"
+                  loading={saving}
+                  disabled={!config || saving || !isDirty}
+                  onClick={() => void handleSave()}
+                >
+                  Lưu thay đổi
+                </Button>
+              </div>
             </div>
           </Card>
           </Spin>
@@ -1902,7 +2073,10 @@ const SettingsPage = () => {
               body: { padding: "24px", background: config?.bgColor ?? "#fff", borderRadius: "0 0 12px 12px" },
             }}
             title={
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Xem trước Storefront</span>
+              <span className="f1g-preview-title">
+                <span style={{ fontSize: 14, fontWeight: 600 }}>Xem trước Storefront</span>
+                <Tag bordered={false} color="default" icon={<FileTextOutlined />}>Dữ liệu minh họa</Tag>
+              </span>
             }
           >
             {widgetLoading || !config ? (
@@ -1910,7 +2084,7 @@ const SettingsPage = () => {
                 <Spin size="large" />
               </div>
             ) : (
-              <StorefrontPreview config={config} reviewCount={3} />
+              <StorefrontPreview config={config} reviewCount={3} activeTab={activeTabKey} />
             )}
           </Card>
         </Col>

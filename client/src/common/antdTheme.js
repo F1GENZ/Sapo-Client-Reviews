@@ -5,6 +5,8 @@ export const APP_ANTD_THEME = {
     colorText: "#0f172a",
     colorTextSecondary: "#475569",
     colorTextTertiary: "#64748b",
+    colorTextPlaceholder: "#64748b",
+    colorLink: "#0958d9",
     colorBorder: "#d9e1ec",
     colorBorderSecondary: "#e5eaf2",
     colorBgLayout: "#f5f7fb",
@@ -34,6 +36,11 @@ export const APP_ANTD_THEME = {
     Tabs: {
       titleFontSize: 14,
       horizontalMargin: "0 0 14px 0",
+    },
+    Segmented: {
+      itemSelectedBg: "#e6f4ff",
+      itemSelectedColor: "#0958d9",
+      trackBg: "#eef2f7",
     },
   },
 };
