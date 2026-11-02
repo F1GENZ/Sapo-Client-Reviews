@@ -888,6 +888,7 @@ async function main() {
       await waitUntil(() => state.persisted.widgetPuts.length > 0);
       assert.equal(state.widgetConfig.titleText, "Chưa lưu");
       await waitUntil(() => state.widgetConfig.allowImage === false);
+      await waitUntil(async () => (await page.locator(".f1g-tab-dot").count()) === 0);
       assert.equal(await page.locator(".f1g-tab-dot").count(), 0, "dots clear after a successful save");
     });
 
