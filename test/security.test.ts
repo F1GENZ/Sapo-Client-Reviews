@@ -141,6 +141,20 @@ test('req.ip ignores spoofed forwarding headers unless the peer is a trusted pro
   }
 });
 
+test('req.ip behind Cloudflare skips edge hops, so Pages-proxied and direct clients get their own bucket key', async () => {
+  const server = await hardenedServer({ TRUST_PROXY: 'loopback,173.245.48.0/20,2a06:98c0::/29' });
+  try {
+    const ipFor = async (forwarded: string): Promise<string> =>
+      (await (await fetch(`${server.base}/api/ip`, { headers: { 'X-Forwarded-For': forwarded } })).json()).ip;
+
+    assert.equal(await ipFor('198.51.100.1, 203.0.113.9'), '203.0.113.9', 'direct visitor: the hop Cloudflare appended, not the forged prefix');
+    assert.equal(await ipFor('198.51.100.1, 203.0.113.9, 173.245.48.7'), '203.0.113.9', 'Pages Function egress (IPv4 edge) is skipped');
+    assert.equal(await ipFor('198.51.100.1, 203.0.113.9, 2a06:98c0:3600::103'), '203.0.113.9', 'Pages Function egress (IPv6 edge) is skipped');
+  } finally {
+    await server.close();
+  }
+});
+
 test('security header matrix: API, OAuth and storefront assets', async () => {
   const server = await hardenedServer();
   try {
