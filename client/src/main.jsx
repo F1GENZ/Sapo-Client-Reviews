@@ -1,7 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { App as AntdApp } from 'antd'
 import App from './App.jsx'
 import { reportClientError } from './common/ErrorReporter'
 import { queryClient } from './common/queryClient'
@@ -21,8 +20,6 @@ window.addEventListener('unhandledrejection', (event) => {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <QueryClientProvider client={queryClient}>
-    <AntdApp>
-      <App />
-    </AntdApp>
+    <App />
   </QueryClientProvider>
 )

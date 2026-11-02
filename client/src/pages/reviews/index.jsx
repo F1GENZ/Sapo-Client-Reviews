@@ -31,7 +31,6 @@ import {
   downloadExport,
 } from "../../components/DataTools";
 import {
-  App,
   Badge,
   Breadcrumb,
   Button,
@@ -164,7 +163,6 @@ const ReviewsPage = () => {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [searchParams, setSearchParams] = useSearchParams();
-  const { modal } = App.useApp();
   const [starFilter, setStarFilter] = useState(null);
   const [activeTab, setActiveTab] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
@@ -662,20 +660,6 @@ const ReviewsPage = () => {
 
   const runBulk = useCallback(async (action) => {
     if (!selectedItems.length) return;
-    if (action === "delete") {
-      const confirmed = await new Promise((resolve) => {
-        modal.confirm({
-          title: `Xoá vĩnh viễn ${selectedItems.length} đánh giá?`,
-          content: "Đánh giá đã xoá không thể khôi phục.",
-          okText: "Xoá",
-          okButtonProps: { danger: true },
-          cancelText: "Huỷ",
-          onOk: () => resolve(true),
-          onCancel: () => resolve(false),
-        });
-      });
-      if (!confirmed) return;
-    }
     setBulkBusy(true);
     try {
       const result = await bulkReviews(action, selectedItems);
@@ -687,7 +671,7 @@ const ReviewsPage = () => {
     } finally {
       setBulkBusy(false);
     }
-  }, [clearSelection, invalidateAll, modal, selectedItems]);
+  }, [clearSelection, invalidateAll, selectedItems]);
 
   const handleExport = useCallback(async (format) => {
     setExporting(true);
@@ -991,7 +975,13 @@ const ReviewsPage = () => {
           { key: "pending", label: "Chờ duyệt", onClick: () => void runBulk("pending") },
           { key: "hidden", label: "Ẩn", onClick: () => void runBulk("hidden") },
           { key: "spam", label: "Spam", onClick: () => void runBulk("spam") },
-          { key: "delete", label: "Xoá", danger: true, onClick: () => void runBulk("delete") },
+          {
+            key: "delete",
+            label: "Xoá",
+            danger: true,
+            confirm: `Xoá vĩnh viễn ${selectedItems.length} đánh giá?`,
+            onClick: () => void runBulk("delete"),
+          },
         ]}
       />
 

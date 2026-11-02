@@ -7,6 +7,7 @@ import {
   Flex,
   Input,
   Modal,
+  Popconfirm,
   Radio,
   Space,
   Table,
@@ -259,18 +260,34 @@ export const BulkActionBar = ({ count, onClear, actions, busy }) => {
       aria-label="Thao tác hàng loạt"
     >
       <Text strong>Đã chọn {count} mục</Text>
-      {actions.map((action) => (
-        <Button
-          key={action.key}
-          size="small"
-          danger={action.danger}
-          disabled={busy}
-          onClick={action.onClick}
-          icon={action.icon}
-        >
-          {action.label}
-        </Button>
-      ))}
+      {actions.map((action) =>
+        action.confirm ? (
+          <Popconfirm
+            key={action.key}
+            title={action.confirm}
+            okText={action.label}
+            cancelText="Huỷ"
+            okButtonProps={{ danger: action.danger }}
+            onConfirm={action.onClick}
+            disabled={busy}
+          >
+            <Button size="small" danger={action.danger} disabled={busy} icon={action.icon}>
+              {action.label}
+            </Button>
+          </Popconfirm>
+        ) : (
+          <Button
+            key={action.key}
+            size="small"
+            danger={action.danger}
+            disabled={busy}
+            onClick={action.onClick}
+            icon={action.icon}
+          >
+            {action.label}
+          </Button>
+        ),
+      )}
       <Button size="small" type="text" onClick={onClear} disabled={busy}>
         Bỏ chọn
       </Button>

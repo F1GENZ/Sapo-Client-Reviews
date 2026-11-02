@@ -724,7 +724,7 @@ async function main() {
       await card.locator("label.ant-checkbox-wrapper").first().click();
       await expectText(page, "Đã chọn 1 mục");
       await page.getByRole("button", { name: "Xoá", exact: true }).first().click();
-      const confirmBox = page.locator(".ant-modal-confirm").last();
+      const confirmBox = page.locator(".ant-popconfirm").last();
       await expectVisible(confirmBox, "bulk delete confirmation");
       assert.match(await confirmBox.innerText(), /Xoá vĩnh viễn 1 đánh giá\?/);
       assert(!requests.some((r) => r.pathname === "/api/admin/reviews/bulk"), "bulk request sent before confirmation");
