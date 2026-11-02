@@ -8,3 +8,5 @@ Thumbs.db
 .git-nested/
 .claude/
 .antigravity/
+.omp/
+.wrangler/
