@@ -1,5 +1,7 @@
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 2 * 1024 * 1024;
+// Review media can be deleted by the merchant or on uninstall; a long edge lifetime would keep serving it afterwards.
+const MEDIA_CACHE_CONTROL = 'public, max-age=300';
 
 const EXTENSION_BY_TYPE = {
   'image/jpeg': 'jpg',
@@ -60,7 +62,7 @@ async function handlePut(request, key, env) {
     if (body.byteLength > maxBytes) return jsonResponse({ error: 'File too large', code: 'file_too_large' }, 413);
     if (body.byteLength === 0) return jsonResponse({ error: 'Empty file', code: 'empty_file' }, 400);
 
-    await env.MEDIA.put(key, body, { httpMetadata: { contentType } });
+    await env.MEDIA.put(key, body, { httpMetadata: { contentType, cacheControl: MEDIA_CACHE_CONTROL } });
     return jsonResponse({ success: true, cdnUrl: `https://${env.CDN_DOMAIN}/${key}` }, 200);
   } catch {
     return jsonResponse({ error: 'Upload failed', code: 'upload_failed' }, 500);

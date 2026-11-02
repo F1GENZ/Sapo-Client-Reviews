@@ -223,3 +223,12 @@ test('worker enforces token, per-type limits and server-shaped keys', async () =
   assert.equal((await workerPut(env, { key: 'reviews/demo.mysapo.net/123/x/photo.png' })).status, 400);
   assert.equal((await workerPut(env, { type: 'image/svg+xml' })).status, 400);
 });
+
+test('worker stores media with a short cache lifetime so deleted media leaves the edge within minutes', async () => {
+  const { env, stored } = workerEnv();
+  assert.equal((await workerPut(env)).status, 200);
+  const { httpMetadata } = fake<{ httpMetadata: { contentType: string; cacheControl: string } }>(stored[0].options);
+  assert.equal(httpMetadata.contentType, 'image/png');
+  const maxAge = Number(/max-age=(\d+)/.exec(httpMetadata.cacheControl)?.[1]);
+  assert.ok(maxAge > 0 && maxAge <= 300, `unexpected cache lifetime: ${httpMetadata.cacheControl}`);
+});
