@@ -560,6 +560,7 @@ const StorefrontPreview = ({ config, reviewCount: reviewCountProp, activeTab }) 
         .f1g-preview .f1g-summary__count { font-size: 0.75rem; color: var(--f1g-text-muted); font-weight: 500; }
         .f1g-preview .f1g-summary__bars { flex: 1; display: flex; flex-direction: column; gap: 5px; padding-top: 6px; }
         .f1g-preview .f1g-bar-row {
+          min-height: 24px;
           display: flex; align-items: center; gap: 8px; background: none; border: none; padding: 2px 0;
           cursor: pointer; font-family: inherit; width: 100%; transition: opacity 0.15s;
         }

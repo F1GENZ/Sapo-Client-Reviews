@@ -18,6 +18,16 @@
     "url": "{{ canonical_url | escape }}",
     {% if product.featured_image.src != blank %}"image": "{{ product.featured_image.src | escape }}",{% endif %}
     {% if product.vendor != blank %}"brand": { "@type": "Brand", "name": "{{ product.vendor | escape }}" },{% endif %}
+    {% if product.price != blank %}
+    "offers": {
+      "@type": "Offer",
+      "url": "{{ canonical_url | escape }}",
+      "priceCurrency": "VND",
+      "price": "{{ product.price }}",
+      {% if product.available != nil %}"availability": "{% if product.available %}https://schema.org/InStock{% else %}https://schema.org/OutOfStock{% endif %}",{% endif %}
+      "itemCondition": "https://schema.org/NewCondition"
+    },
+    {% endif %}
     "aggregateRating": {
       "@type": "AggregateRating",
       "ratingValue": "{{ f1g_avg }}",

@@ -659,7 +659,7 @@ const ReviewsPage = () => {
     setBulkBusy(true);
     try {
       const result = await bulkReviews(action, selectedItems);
-      toast.success(`Đã xử lý ${result.updated} mục, bỏ qua ${result.skipped} mục`);
+      toast.success(`Đã cập nhật ${result.updated} mục, đã xoá ${result.deleted ?? 0} mục, bỏ qua ${result.skipped} mục`);
       clearSelection();
       void invalidateAll();
     } catch (error) {

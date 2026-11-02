@@ -232,3 +232,22 @@ Rows that do not carry over are still listed with the Sapo mechanism that makes 
 4. AI reply suggestion behind `GEMINI_API_KEY` (BLOCKED key documented).
 5. Hardening: `127.0.0.1` bind, `statement_timeout` on the app role, `unhandledRejection` logging, stale-uninstall fence, Q&A product check.
 6. UX: settings action bar + tab strip + scroll container + reset scope + one save for the whole config (D01–D28). Accent/verified defaults stay byte-identical (`#f59e0b` / `#01ab56`) because live shops that never saved the key inherit them; AA is met by choosing dark text on a low-contrast accent (`--f1genz-sapo-review-on-accent`), not by recolouring.
+
+## 8. Round-2 run (measured 2026-11-02, commit 82bdbf8)
+
+| Decision | Rows |
+|---|---|
+| PORTED | 24 |
+| ALREADY_EQUAL | 58 |
+| BETTER_ON_SAPO | 14 |
+| NOT_APPLICABLE | 22 |
+| BLOCKED | 3 (AI highlights and AI seeds need a paid key plus a credit ledger; premium/pricing need a Sapo billing API that does not exist) |
+
+Proof run: server unit 231/231, server HTTP e2e 95/95 (Redis state backend), client journeys 46/46, storefront widget 36/36, client unit 5/5, budget 107.0 / 167.8 / 29.2 / 5.1 kB.
+
+Live production checks: bulk approve → 7 reviews, reply, delete; import dry-run → apply (2 rows); media ticket → upload → review with image; Q&A answer; outbound webhook delivered (HTTP 200, one attempt); `products/update` webhook ingested (2 processed); metafields sync-all (synced 1); diagnostics export (1754 B); widget on the PDP with 8 reviews, curated slider and JSON-LD `AggregateRating` (4.6/8); accent `#f59e0b` and verified `#01ab56` unchanged, `--f1genz-sapo-review-on-accent` now `#1a1a1a`.
+
+Lifecycle on the live shop: uninstall through the Sapo admin trash icon → `AppInstall.status=uninstalled`, generation 6, tokenVersion 5, token cleared, admin session 401, data kept (8 reviews / 3 questions / 49 catalog rows); reinstall through `GET /api/oauth/install/start` → consent → callback/handoff → `active`, generation 7, tokenVersion 6, 8 reviews still served at 4.6, SPA dashboard renders. During the uninstall window the public endpoints still answered 200; by code (`review.service.ts:1065`) the list returns an empty page and the config falls back to defaults for a non-serving store.
+
+Parity probe (30 sequential GETs from this machine, p50/p95 ms): config 100/121 vs Haravan 109/126; summaries 98/119 vs 167/182; list 111/164 vs 169/185; slider 99/119 vs 99/111 (Haravan answers with an empty slider). Widget JS gzip 29.7 kB vs 26.1 kB; CSS 5.1 kB vs 5.5 kB.
+

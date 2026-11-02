@@ -38,7 +38,7 @@ ecosystem.config.cjs   PM2: one app, f1genz-sapo-api
 | `review/slider-payload.ts` | Compact public payload for `<f1genz-curated-slider>` (pinned, then rating, then recency; 220-char content; 8 kB cap). | Include contact fields or unwrapped media URLs. |
 | `review.service.ts` (widget-config revisions) | Widget-config history and restore. | Return another store's revision. |
 | `outbound/` | Merchant webhooks: CRUD, signed delivery, retry sweeper, dead-letter after the attempt cap, SSRF guard on the target host. | Follow a redirect, or retry a terminal delivery. |
-| `ai/` | Reply suggestion behind `GEMINI_API_KEY`. Without a key the route answers 503 and the admin hides the action. | Call the model for anonymous input, or log prompt content. |
+| `ai/` | Reply suggestion behind `GEMINI_API_KEY`. Without a key the route answers 503 and the admin shows the reason as a toast. | Call the model for anonymous input, or log prompt content. |
 | `storefront/` | Storefront config metafield and widget asset serving. | |
 | `media/` | Upload tickets (HMAC-signed) for the R2 Worker; best-effort object deletion and listing through the Worker (`DELETE /<key>`, `GET /list`). | |
 | `dashboard/`, `ops/` | Admin KPIs; health, resync, backfill, and the durability sweep. | |

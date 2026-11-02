@@ -25,7 +25,7 @@ Every variable the server reads is parsed and validated once at boot by `loadEnv
 | `REQUEST_BODY_LIMIT` | `1mb` | explicit | `<number>b`, `kb`, or `mb`. |
 | `WEBHOOK_BODY_LIMIT` | `256kb` | explicit | Same format; applied to `/api/oauth/install/webhooks`. |
 | `LISTEN_HOST` | `0.0.0.0` | `127.0.0.1` in production | Interface the HTTP server binds. Production sits behind `cloudflared`, which dials `http://localhost:3021`, so loopback is enough and keeps the port off the public interface. |
-| `GEMINI_API_KEY` | empty | empty | When empty, `POST /api/admin/ai/reply-suggestion` answers 503 instead of calling a model, and the admin hides the action. |
+| `GEMINI_API_KEY` | empty | empty | When empty, `POST /api/admin/ai/reply-suggestion` answers 503 instead of calling a model; the admin keeps the button and shows `AI chưa được cấu hình cho ứng dụng này (thiếu GEMINI_API_KEY)`. |
 | `AI_MODEL` | `gemini-2.5-flash` | set to a model the key can reach | Model id used by the reply suggestion. |
 
 ## Sapo OAuth and webhooks
