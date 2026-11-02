@@ -197,7 +197,7 @@ const workerEnv = () => {
     env: {
       UPLOAD_SECRET: 'worker-secret',
       CDN_DOMAIN: 'cdn.example.test',
-      R2_BUCKET: { put: async (key: string, body: Uint8Array, options: unknown) => { stored.push({ key, size: body.byteLength, options }); } },
+      MEDIA: { put: async (key: string, body: Uint8Array, options: unknown) => { stored.push({ key, size: body.byteLength, options }); } },
     },
   };
 };

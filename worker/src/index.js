@@ -33,7 +33,7 @@ export default {
     const key = url.pathname.slice(1);
     if (!key) return jsonResponse({ error: 'Missing object key', code: 'missing_key' }, 400);
     if (!OBJECT_KEY_RE.test(key)) return jsonResponse({ error: 'Invalid object key', code: 'invalid_key' }, 400);
-    if (!env.R2_BUCKET) return jsonResponse({ error: 'R2 bucket is not configured', code: 'bucket_not_configured' }, 500);
+    if (!env.MEDIA) return jsonResponse({ error: 'R2 bucket is not configured', code: 'bucket_not_configured' }, 500);
 
     if (request.method === 'DELETE') return handleDelete(key, env);
     return handlePut(request, key, env);
@@ -60,7 +60,7 @@ async function handlePut(request, key, env) {
     if (body.byteLength > maxBytes) return jsonResponse({ error: 'File too large', code: 'file_too_large' }, 413);
     if (body.byteLength === 0) return jsonResponse({ error: 'Empty file', code: 'empty_file' }, 400);
 
-    await env.R2_BUCKET.put(key, body, { httpMetadata: { contentType } });
+    await env.MEDIA.put(key, body, { httpMetadata: { contentType } });
     return jsonResponse({ success: true, cdnUrl: `https://${env.CDN_DOMAIN}/${key}` }, 200);
   } catch {
     return jsonResponse({ error: 'Upload failed', code: 'upload_failed' }, 500);
@@ -69,7 +69,7 @@ async function handlePut(request, key, env) {
 
 async function handleDelete(key, env) {
   try {
-    await env.R2_BUCKET.delete(key);
+    await env.MEDIA.delete(key);
     return jsonResponse({ success: true }, 200);
   } catch {
     return jsonResponse({ error: 'Delete failed', code: 'delete_failed' }, 500);
@@ -78,7 +78,7 @@ async function handleDelete(key, env) {
 
 async function handleList(url, env) {
   if (url.pathname !== '/list') return jsonResponse({ error: 'Not found', code: 'not_found' }, 404);
-  if (!env.R2_BUCKET) return jsonResponse({ error: 'R2 bucket is not configured', code: 'bucket_not_configured' }, 500);
+  if (!env.MEDIA) return jsonResponse({ error: 'R2 bucket is not configured', code: 'bucket_not_configured' }, 500);
 
   const prefix = url.searchParams.get('prefix') || 'reviews/';
   if (!LIST_PREFIX_RE.test(prefix) || prefix.includes('..')) {
@@ -95,7 +95,7 @@ async function handleList(url, env) {
   }
 
   try {
-    const listed = await env.R2_BUCKET.list({ prefix, limit, ...(cursor ? { cursor } : {}) });
+    const listed = await env.MEDIA.list({ prefix, limit, ...(cursor ? { cursor } : {}) });
     return jsonResponse({
       objects: listed.objects.map((object) => ({
         key: object.key,

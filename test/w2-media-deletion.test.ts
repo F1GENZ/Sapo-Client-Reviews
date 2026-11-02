@@ -130,7 +130,7 @@ test('worker DELETE and /list require the token and validate keys and prefixes',
     { key: keyOf(2), uploaded: new Date(1_700_000_100_000), size: 20 },
     { key: keyOf(3), uploaded: new Date(1_700_000_200_000), size: 30 },
   ]);
-  const env = { UPLOAD_SECRET: SECRET, R2_BUCKET: bucket, CDN_DOMAIN: 'cdn.example.test' };
+  const env = { UPLOAD_SECRET: SECRET, MEDIA: bucket, CDN_DOMAIN: 'cdn.example.test' };
 
   assert.equal((await worker.fetch(workerRequest(`/${keyOf(1)}`, { method: 'DELETE', token: '' }), env)).status, 401);
   assert.equal((await worker.fetch(workerRequest(`/${keyOf(1)}`, { method: 'DELETE', token: 'wrong' }), env)).status, 401);

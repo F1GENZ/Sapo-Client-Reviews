@@ -1,10 +1,11 @@
-name = "f1genz-sapo-r2-upload"
+name = "f1genz-sapo-reviews-media"
+account_id = "dc25380a46ad0853b9b0d98ce7a74270"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
 [[r2_buckets]]
-binding = "R2_BUCKET"
-bucket_name = "f1genz-sapo-images"
+binding = "MEDIA"
+bucket_name = "f1genz-sapo-reviews-media"
 
 [vars]
 CDN_DOMAIN = "images-sapo.f1genz.dev"
