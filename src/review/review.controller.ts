@@ -27,6 +27,8 @@ import { UpdateWidgetConfigDto } from './dto/update-widget-config.dto';
 import { SyncMetafieldDto } from './dto/sync-metafield.dto';
 import { NumericIdPipe } from '../common/pipes/numeric-id.pipe';
 import { STORE_DOMAIN_RE } from '../common/security/public-limits';
+import { ReviewBulkDto, ReviewImportDto } from './review-data-tools.dto';
+import { ReviewDataToolsService } from './review-data-tools.service';
 
 type AuthRequest = {
   token?: string;
@@ -51,7 +53,10 @@ function requireAuth(req: AuthRequest): asserts req is Required<AuthRequest> & {
 @Controller('api/admin/reviews')
 @UseGuards(ShopAuthGuard)
 export class ReviewController {
-  constructor(private readonly reviewService: ReviewService) {}
+  constructor(
+    private readonly reviewService: ReviewService,
+    private readonly dataTools: ReviewDataToolsService,
+  ) {}
 
   @Get('widget-config')
   async getWidgetConfig(@Req() req: AuthRequest) {
@@ -102,6 +107,75 @@ export class ReviewController {
       body.productId,
     );
     return { data: result };
+  }
+
+  @Get('export')
+  async exportReviews(
+    @Query('format') format: string | undefined,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    const normalized = format === 'json' ? 'json' : 'csv';
+    return { data: await this.dataTools.exportReviews(req.storeDomain, normalized) };
+  }
+
+  @Get('import/history')
+  async importHistory(@Req() req: AuthRequest) {
+    requireAuth(req);
+    return { data: await this.dataTools.listImportRuns(req.storeDomain, 'reviews') };
+  }
+
+  @Post('import/dry-run')
+  async importDryRun(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    dto: ReviewImportDto,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    return { data: await this.dataTools.importReviews(req.token, req.storeDomain, { ...dto, dryRun: true }) };
+  }
+
+  @Post('import')
+  async importReviews(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    dto: ReviewImportDto,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    return {
+      data: await this.dataTools.importReviews(req.token, req.storeDomain, {
+        format: dto.format,
+        body: dto.body,
+        dryRun: dto.dryRun === true,
+      }),
+    };
+  }
+
+  @Post('bulk')
+  async bulkReviews(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    dto: ReviewBulkDto,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    return { data: await this.dataTools.bulkReviews(req.token, req.storeDomain, dto.action, dto.items) };
+  }
+
+  @Get('widget-config/revisions')
+  async widgetConfigRevisions(@Req() req: AuthRequest) {
+    requireAuth(req);
+    return { data: await this.reviewService.listWidgetConfigRevisions(req.storeDomain) };
+  }
+
+  @Post('widget-config/revisions/:revisionId/restore')
+  async restoreWidgetConfigRevision(
+    @Param('revisionId') revisionId: string,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    return {
+      data: await this.reviewService.restoreWidgetConfigRevision(req.token, req.storeDomain, revisionId),
+    };
   }
 
   @Get()

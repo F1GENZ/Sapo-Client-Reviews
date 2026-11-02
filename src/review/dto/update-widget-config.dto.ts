@@ -41,4 +41,6 @@ export class UpdateWidgetConfigDto {
   @IsOptional() @IsBoolean() showVerifiedAll?: boolean;
   @IsOptional() @IsBoolean() requireLogin?: boolean;
   @IsOptional() @IsBoolean() requirePurchaseToReview?: boolean;
+  @IsOptional() @IsBoolean() curatedSliderEnabled?: boolean;
+  @IsOptional() @IsInt() @Min(5) @Max(15) curatedSliderCount?: number;
 }

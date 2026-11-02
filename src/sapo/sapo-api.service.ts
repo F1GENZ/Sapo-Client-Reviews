@@ -209,6 +209,24 @@ export class SapoApiService {
     return key ? payload[key] : [];
   }
 
+  async getOrders(
+    storeDomain: string,
+    accessToken: string,
+    params: { page?: number; limit?: number } = {},
+  ): Promise<Array<Record<string, unknown>>> {
+    const qp = this.buildQueryParams({
+      page: params.page ?? 1,
+      limit: Math.max(1, Math.min(250, params.limit ?? 50)),
+    });
+    const res = await this.fetch(storeDomain, accessToken, `/orders.json?${qp.toString()}`);
+    const payload = await res.json() as Record<string, unknown>;
+    const key = Object.keys(payload).find((candidate) => Array.isArray(payload[candidate]));
+    const rows = key ? payload[key] : [];
+    return Array.isArray(rows)
+      ? rows.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object')
+      : [];
+  }
+
   async getProductsCount(storeDomain: string, accessToken: string, params: GetProductsCountParams = {}): Promise<number> {
     const qp = this.buildQueryParams(params as Record<string, string | number | boolean | null | undefined>);
     const path = `/products/count.json${qp.toString() ? '?' + qp.toString() : ''}`;

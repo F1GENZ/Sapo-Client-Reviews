@@ -66,6 +66,7 @@ const makeHarness = (options: {
     purchaseStore as never,
     pending as never,
     {} as never,
+    { enqueue: async () => 0 } as never,
   );
   return { service, upserts, purchaseCalls, metafieldReads };
 };
@@ -261,7 +262,9 @@ test('public summaries validate ids, cap the list and use one grouped query', as
     },
   };
   const store = new ReviewProductStoreService(prisma as never);
-  const service = new ReviewService({} as never, prisma as never, {} as never, store, {} as never, {} as never, {} as never, {} as never);
+  const service = new ReviewService({} as never, prisma as never, {} as never, store, {} as never, {} as never, {} as never, {} as never,
+    { enqueue: async () => 0 } as never,
+  );
   const ids = ['1', '2', 'abc', '1', '12x', ...Array.from({ length: 150 }, (_, i) => String(1000 + i))];
   const out = await service.getPublicSummaries(STORE, ids);
   assert.equal(calls.length, 1);
@@ -291,7 +294,9 @@ test('admin list composes unreplied with search and filters by star', async () =
       }],
     },
   };
-  const service = new ReviewService({} as never, prisma as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+  const service = new ReviewService({} as never, prisma as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+    { enqueue: async () => 0 } as never,
+  );
   const page = await service.listAllReviews('tok', STORE, { status: 'unreplied', search: 'tot', star: 4, productId: '100' });
   const listWhere = wheres[wheres.length - 1];
   assert.equal(listWhere.rating, 4);

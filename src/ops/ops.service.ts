@@ -9,7 +9,9 @@ import {
 } from '@nestjs/common';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
+import { SapoApiService } from '../sapo/sapo-api.service';
 import { SapoService } from '../sapo/sapo.service';
+import { ReviewService } from '../review/review.service';
 import { WebhookRegistrationService } from '../sapo/webhook-registration.service';
 import { CatalogSyncService } from '../catalog/catalog-sync.service';
 import { CatalogProductStoreService } from '../catalog/catalog-product-store.service';
@@ -24,6 +26,17 @@ import { runSection } from '../health/degraded-section';
 import { countRecentFailures, deriveHealthVerdict, FAILURE_WINDOW_MINUTES } from '../health/health-verdict';
 
 const WEBHOOK_LATEST_LIMIT = 8;
+
+const latestActivityAt = (
+  webhooks: { latest?: Array<{ processedAt?: Date | null }> } | null,
+  installUpdatedAt: Date,
+): number => {
+  const processed = webhooks?.latest?.find((row) => row.processedAt instanceof Date)?.processedAt;
+  return (processed instanceof Date ? processed : installUpdatedAt).getTime();
+};
+const ORDERS_SYNC_MAX_PAGES = 5;
+const ORDERS_SYNC_PAGE_SIZE = 50;
+const ORDERS_SYNC_LOCK_TTL_SECONDS = 600;
 const BACKFILL_LOCK_TTL_SECONDS = 900;
 const BACKFILL_COOLDOWN_SECONDS = 300;
 
@@ -44,6 +57,8 @@ export class OpsService {
     private readonly storefront: StorefrontService,
     private readonly pendingMetafields: MetafieldSyncPendingService,
     private readonly redis: RedisService,
+    private readonly sapoApi: SapoApiService,
+    private readonly reviewService: ReviewService,
   ) {}
 
   async getHealth(storeDomain: string) {
@@ -102,7 +117,7 @@ export class OpsService {
       purchases: purchaseAudit,
       webhooks: webhookStats ?? { totals: [], latest: [] },
       metafieldSync,
-      lastUpdated: Date.now(),
+      lastUpdated: latestActivityAt(webhookStats, install.updatedAt),
     };
   }
 
@@ -123,6 +138,65 @@ export class OpsService {
     return {
       totals: groups.map((group) => ({ status: group.status, count: group._count._all })),
       latest,
+    };
+  }
+
+  async syncOrders(storeDomain: string, options: { pages?: number } = {}) {
+    const pages = Math.max(1, Math.min(ORDERS_SYNC_MAX_PAGES, Math.trunc(options.pages ?? 1)));
+    const lock = await this.redis.acquireLock(`lock:ops:orders-sync:${storeDomain}`, ORDERS_SYNC_LOCK_TTL_SECONDS);
+    if (!lock) {
+      throw new ConflictException({ code: 'orders_sync_in_progress', message: 'An order sync is already running for this store' });
+    }
+    try {
+      const install = await this.prisma.appInstall.findUnique({
+        where: { storeDomain },
+        select: { shopId: true },
+      });
+      if (!install) throw new NotFoundException({ code: 'install_not_found', message: 'App not installed for this store' });
+      const accessToken = await this.sapo.resolveAccessToken(storeDomain);
+      let orders = 0;
+      let purchases = 0;
+      for (let page = 1; page <= pages; page += 1) {
+        const rows = await this.sapoApi.getOrders(storeDomain, accessToken, {
+          page,
+          limit: ORDERS_SYNC_PAGE_SIZE,
+        });
+        if (rows.length === 0) break;
+        for (const order of rows) {
+          orders += 1;
+          purchases += await this.purchaseStore.syncOrder({ shopId: install.shopId, order });
+        }
+        if (rows.length < ORDERS_SYNC_PAGE_SIZE) break;
+      }
+      return { ok: true, storeDomain, pages, orders, purchases };
+    } finally {
+      await this.redis.releaseLock(lock).catch(() => false);
+    }
+  }
+
+  async syncAllMetafields(storeDomain: string) {
+    const accessToken = await this.sapo.resolveAccessToken(storeDomain);
+    const result = await this.reviewService.syncPublicSummaryMetafield(accessToken, storeDomain);
+    return { ok: true, storeDomain, ...result };
+  }
+
+  async exportDiagnostics(storeDomain: string) {
+    const health = await this.getHealth(storeDomain);
+    const events = await this.prisma.webhookEvent.findMany({
+      where: { resolvedStoreDomain: storeDomain },
+      orderBy: { updatedAt: 'desc' },
+      take: 50,
+      select: {
+        id: true, topic: true, normalizedTopic: true, status: true, attempts: true,
+        maxAttempts: true, lastError: true, receivedAt: true, processedAt: true, nextRetryAt: true,
+      },
+    });
+    return {
+      generatedAt: new Date().toISOString(),
+      storeDomain,
+      build: this.env.BUILD_SHA,
+      health,
+      webhookEvents: events,
     };
   }
 

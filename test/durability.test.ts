@@ -572,6 +572,11 @@ const makeReviewHarness = ({ sapoApi, installs }: { sapoApi?: Partial<ReviewApi>
   };
   const prisma: Row = {
     ...pendingDb,
+    widgetConfigRevision: {
+      create: async () => ({}),
+      findMany: async () => [],
+      deleteMany: async () => ({ count: 0 }),
+    },
     appInstall: {
       findUnique: async ({ where }: { where: { storeDomain: string } }) =>
         installRows[where.storeDomain] ? { ...installRows[where.storeDomain] } : null,
@@ -603,6 +608,7 @@ const makeReviewHarness = ({ sapoApi, installs }: { sapoApi?: Partial<ReviewApi>
     fake<PurchaseStoreService>({}),
     pending,
     fake<MediaService>({}),
+    { enqueue: async () => 0 } as never,
   );
   return { service, pending, pendingDb, prisma, api, statusUpdates, installRows, created };
 };

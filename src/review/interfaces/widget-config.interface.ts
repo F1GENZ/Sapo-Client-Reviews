@@ -12,9 +12,13 @@ export interface WidgetConfig {
   allowQnA?: boolean;
   allowImage?: boolean;
   allowVideo?: boolean;
+  curatedSliderEnabled?: boolean;
+  curatedSliderCount?: number;
 }
 
 export const DEFAULT_WIDGET_CONFIG: WidgetConfig = {
   formPhoneMode: 'optional',
   reviewQnaDisplayMode: 'tabs',
+  curatedSliderEnabled: true,
+  curatedSliderCount: 15,
 };

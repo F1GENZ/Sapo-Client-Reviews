@@ -320,3 +320,77 @@ model MetafieldSyncPending {
   @@index([nextAttemptAt])
   @@map("metafield_sync_pending")
 }
+
+model WidgetConfigRevision {
+  id          String   @id @default(cuid())
+  shopId      String   @map("shop_id")
+  storeDomain String   @map("store_domain")
+  config      Json
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([storeDomain, createdAt])
+  @@index([shopId, createdAt])
+  @@map("widget_config_revisions")
+}
+
+model ImportRun {
+  id          String   @id @default(cuid())
+  shopId      String   @map("shop_id")
+  storeDomain String   @map("store_domain")
+  kind        String
+  mode        String
+  format      String
+  total       Int      @default(0)
+  created     Int      @default(0)
+  updated     Int      @default(0)
+  skipped     Int      @default(0)
+  failed      Int      @default(0)
+  errors      Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([storeDomain, createdAt])
+  @@map("import_runs")
+}
+
+model OutboundWebhookEndpoint {
+  id               String   @id @default(cuid())
+  shopId           String   @map("shop_id")
+  storeDomain      String   @map("store_domain")
+  url              String
+  description      String?
+  events           Json
+  secretCiphertext String?  @map("secret_ciphertext")
+  secretIv         String?  @map("secret_iv")
+  secretTag        String?  @map("secret_tag")
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  deliveries OutboundWebhookDelivery[]
+
+  @@index([storeDomain, active])
+  @@map("outbound_webhook_endpoints")
+}
+
+model OutboundWebhookDelivery {
+  id             String   @id @default(cuid())
+  endpointId     String   @map("endpoint_id")
+  endpoint       OutboundWebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  storeDomain    String   @map("store_domain")
+  event          String
+  payload        Json
+  status         String   @default("pending")
+  attempts       Int      @default(0)
+  maxAttempts    Int      @default(5) @map("max_attempts")
+  nextAttemptAt  DateTime? @map("next_attempt_at")
+  responseStatus Int?     @map("response_status")
+  lastError      String?  @map("last_error")
+  deliveredAt    DateTime? @map("delivered_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([status, nextAttemptAt])
+  @@index([endpointId, createdAt])
+  @@index([storeDomain, createdAt])
+  @@map("outbound_webhook_deliveries")
+}

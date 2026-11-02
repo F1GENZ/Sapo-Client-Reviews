@@ -15,7 +15,9 @@ import { PrismaService } from '../src/database/prisma.service';
 import { deriveHealthVerdict } from '../src/health/health-verdict';
 import { PUBLIC_MAX_OFFSET } from '../src/common/security/public-limits';
 import { RedisService } from '../src/redis/redis.service';
+import { ReviewService } from '../src/review/review.service';
 import { ReviewProductStoreService } from '../src/review/review-product-store.service';
+import { SapoApiService } from '../src/sapo/sapo-api.service';
 import { SapoService } from '../src/sapo/sapo.service';
 import { WebhookRegistrationService } from '../src/sapo/webhook-registration.service';
 import type { WebhookRegistrationResult } from '../src/sapo/webhook-registration.service';
@@ -158,7 +160,8 @@ const makeQnaPrisma = (rows: QnaQuestionRecord[], labels: CatalogLabelRow[] = []
   return { prisma: fake<PrismaService>(prisma), calls };
 };
 
-const makeQnaService = (prisma: PrismaService) => new QnaService(prisma, fake<QnaStoreService>({}));
+const makeQnaService = (prisma: PrismaService) =>
+  new QnaService(prisma, fake<QnaStoreService>({}), fake<CatalogProductStoreService>({}), { enqueue: async () => 0 } as never);
 
 test('qna admin list computes status counts with groupBy and prefers the catalog title', async () => {
   const { prisma, calls } = makeQnaPrisma([qnaRow()], [{ productId: 'p1', title: 'Fresh title', handle: 'fresh', image: 'https://cdn.test/i.jpg' }]);
@@ -380,6 +383,8 @@ const makeOps = ({
     fake<StorefrontService>({}),
     fake<MetafieldSyncPendingService>({}),
     redis,
+    fake<SapoApiService>({}),
+    fake<ReviewService>({}),
   );
   return { ops, registered, redis };
 };

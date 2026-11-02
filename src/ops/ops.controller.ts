@@ -1,8 +1,19 @@
-import { Controller, Get, Post, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, UnauthorizedException, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Type } from 'class-transformer';
+import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { ShopAuthGuard } from '../common/guards/shop-auth.guard';
 import { OpsService } from './ops.service';
 
 type StoreRequest = { storeDomain?: string };
+
+class OrdersSyncDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  pages?: number;
+}
 
 const callerStore = (req: StoreRequest): string => {
   if (!req.storeDomain) throw new UnauthorizedException('Missing store session');
@@ -32,5 +43,23 @@ export class OpsController {
   @Post('/backfill-catalog')
   async backfillCatalog(@Req() req: StoreRequest) {
     return { data: await this.ops.backfillCatalog(callerStore(req)) };
+  }
+
+  @Post('/orders/sync')
+  async syncOrders(
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: OrdersSyncDto,
+    @Req() req: StoreRequest,
+  ) {
+    return { data: await this.ops.syncOrders(callerStore(req), { pages: body.pages }) };
+  }
+
+  @Post('/metafields/sync-all')
+  async syncMetafields(@Req() req: StoreRequest) {
+    return { data: await this.ops.syncAllMetafields(callerStore(req)) };
+  }
+
+  @Get('/diagnostics/export')
+  async exportDiagnostics(@Req() req: StoreRequest) {
+    return { data: await this.ops.exportDiagnostics(callerStore(req)) };
   }
 }

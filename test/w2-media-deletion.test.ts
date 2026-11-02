@@ -209,6 +209,7 @@ const makeReviewService = ({ rows, media }: { rows: Map<string, StoredReview>; m
     fake<PurchaseStoreService>({}),
     fake<MetafieldSyncPendingService>({}),
     fake<MediaService>(media),
+    { enqueue: async () => 0 } as never,
   );
   Reflect.set(service, 'syncPublicSummary', async () => true);
   return { service, calls };
@@ -263,6 +264,7 @@ test('submitPublicReview rejects media types the widget settings disallow', asyn
     fake<PurchaseStoreService>({}),
     fake<MetafieldSyncPendingService>({}),
     fake<MediaService>({}),
+    { enqueue: async () => 0 } as never,
   );
   const hooks: PublicSubmitHooks = { chargeIdentity: async () => {}, resolveToken: async () => 'tok' };
   const input = (media: MediaItem[]): PublicReviewInput => ({ rating: 5, content: 'ok', author: 'A', media });
@@ -298,7 +300,12 @@ test('a blank answer is rejected by the DTO and never stored by the service', as
       return { questionId: 'q1', answer, answeredBy, status: 'approved' };
     },
   };
-  const service = new QnaService(fake<PrismaService>({}), fake<QnaStoreService>(qnaStore));
+  const service = new QnaService(
+    fake<PrismaService>({}),
+    fake<QnaStoreService>(qnaStore),
+    fake<CatalogProductStoreService>({}),
+    { enqueue: async () => 0 } as never,
+  );
   Reflect.set(service, 'resolveInstall', async () => ({ shopId: 'shop_1' }));
   await assert.rejects(
     () => service.answerQuestion(STORE, '100', 'q1', fake<AnswerQuestionDto>({ answer: '   ' })),
@@ -356,6 +363,7 @@ const makeSweepHarness = ({ objects, referenced, installs = [{ shopId: 'shop_1',
     fake<SapoService>({ resolveAccessToken: async () => 'tok' }),
     fake<PrismaService>(prisma),
     media,
+    { reclaimStuck: async () => 0, dispatchDue: async () => ({ attempted: 0, delivered: 0, failed: 0 }) } as never,
   );
   const bucket = makeBucket(objects);
   const handler = async (url: string, init: RequestInit): Promise<Response> => {

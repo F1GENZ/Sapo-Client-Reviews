@@ -22,6 +22,8 @@ import { AnswerQuestionDto, UpdateQuestionStatusDto } from './dto/answer-questio
 import { ValidationPipe } from '@nestjs/common';
 import { NumericIdPipe } from '../common/pipes/numeric-id.pipe';
 import { STORE_DOMAIN_RE } from '../common/security/public-limits';
+import { QnaBulkDto, QnaImportDto } from './qna-data-tools.dto';
+import { QnaDataToolsService } from './qna-data-tools.service';
 
 type AuthRequest = {
   token?: string;
@@ -37,7 +39,58 @@ function requireAuth(req: AuthRequest): asserts req is Required<AuthRequest> & {
 @Controller('api/admin/qna')
 @UseGuards(ShopAuthGuard)
 export class QnaController {
-  constructor(private readonly qnaService: QnaService) {}
+  constructor(
+    private readonly qnaService: QnaService,
+    private readonly dataTools: QnaDataToolsService,
+  ) {}
+
+  @Get('export')
+  async exportQuestions(@Query('format') format: string | undefined, @Req() req: AuthRequest) {
+    requireAuth(req);
+    return { data: await this.dataTools.exportQuestions(req.storeDomain, format === 'json' ? 'json' : 'csv') };
+  }
+
+  @Get('import/history')
+  async importHistory(@Req() req: AuthRequest) {
+    requireAuth(req);
+    return { data: await this.dataTools.listImportRuns(req.storeDomain) };
+  }
+
+  @Post('import/dry-run')
+  async importDryRun(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    dto: QnaImportDto,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    return { data: await this.dataTools.importQuestions(req.storeDomain, { ...dto, dryRun: true }) };
+  }
+
+  @Post('import')
+  async importQuestions(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    dto: QnaImportDto,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    return {
+      data: await this.dataTools.importQuestions(req.storeDomain, {
+        format: dto.format,
+        body: dto.body,
+        dryRun: dto.dryRun === true,
+      }),
+    };
+  }
+
+  @Post('bulk')
+  async bulkQuestions(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    dto: QnaBulkDto,
+    @Req() req: AuthRequest,
+  ) {
+    requireAuth(req);
+    return { data: await this.dataTools.bulkQuestions(req.storeDomain, dto.action, dto.items) };
+  }
 
   @Get()
   async listAllQuestions(

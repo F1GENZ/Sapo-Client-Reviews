@@ -22,6 +22,8 @@ import { isSapoAuthRevoked, markInstallNeedsReinstall, sapoErrorStatus } from '.
 import { catalogTitles } from '../catalog/product-label';
 import { NUMERIC_ID_RE, PUBLIC_MAX_OFFSET } from '../common/security/public-limits';
 import { MediaService } from '../media/media.service';
+import type { OutboundEvent } from '../outbound/outbound-webhook.service';
+import { OutboundWebhookService } from '../outbound/outbound-webhook.service';
 import { ReviewProductStoreService } from './review-product-store.service';
 import { CatalogProductStoreService } from '../catalog/catalog-product-store.service';
 import { PurchaseStoreService } from '../purchase/purchase-store.service';
@@ -318,10 +320,22 @@ export class ReviewService {
     private readonly purchaseStore: PurchaseStoreService,
     private readonly pending: MetafieldSyncPendingService,
     private readonly media: MediaService,
+    private readonly outbound: OutboundWebhookService,
   ) {}
 
   private lockKey(shopId: string, productId: string): string {
     return `lock:review:${shopId}:${productId}`;
+  }
+
+  // Safety: a merchant-facing write must not fail because a webhook fan-out failed; the delivery row is the durable record.
+  private emitOutbound(storeDomain: string, event: OutboundEvent, data: Record<string, unknown>): void {
+    void this.outbound
+      .enqueue(storeDomain, event, data)
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `Outbound event ${event} failed for ${storeDomain}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      });
   }
 
   private async acquireLock(shopId: string, productId: string): Promise<RedisLock | null> {
@@ -643,6 +657,18 @@ export class ReviewService {
         await this.syncPublicSummary(storeDomain, token, productId);
       }
 
+      this.emitOutbound(storeDomain, 'review.created', {
+        productId,
+        reviewId,
+        rating: dto.rating,
+        author: dto.author,
+        status,
+        created_at: dto.created_at ?? now,
+      });
+      if (status === 'approved') {
+        this.emitOutbound(storeDomain, 'review.approved', { productId, reviewId, rating: dto.rating });
+      }
+
       return {
         id: reviewId,
         rating: dto.rating,
@@ -820,6 +846,12 @@ export class ReviewService {
     }
 
     if (removedMedia.length) await this.media.deleteByUrls(removedMedia, storeDomain);
+    this.emitOutbound(storeDomain, 'review.updated', {
+      productId,
+      reviewId,
+      rating: result.rating,
+      status: result.status,
+    });
     return result;
   }
 
@@ -840,6 +872,14 @@ export class ReviewService {
 
       await this.reviewStore.updateStatus(shopId, productId, reviewId, status);
       await this.syncPublicSummary(storeDomain, token, productId);
+
+      if (existing.status !== status) {
+        this.emitOutbound(
+          storeDomain,
+          status === 'approved' ? 'review.approved' : 'review.updated',
+          { productId, reviewId, rating: existing.rating, status },
+        );
+      }
 
       return toDomainReview({ ...existing, status });
     } finally {
@@ -882,6 +922,7 @@ export class ReviewService {
       });
 
       await this.syncPublicSummary(storeDomain, token, productId);
+      this.emitOutbound(storeDomain, 'review.replied', { productId, reviewId });
       return toDomainReview({ ...existing, reply, repliedAt: BigInt(now) });
     } finally {
       await this.releaseLock(lock);
@@ -959,6 +1000,9 @@ export class ReviewService {
     }
 
     if (ownedMedia.length) await this.media.deleteByUrls(ownedMedia, storeDomain);
+    if (result.deleted) {
+      this.emitOutbound(storeDomain, 'review.deleted', { productId, reviewId });
+    }
     return result;
   }
 
@@ -1185,10 +1229,72 @@ export class ReviewService {
     dto: UpdateWidgetConfigDto,
     storeDomain: string,
   ): Promise<WidgetConfig> {
+    const install = await this.resolveInstall(storeDomain);
     const patch = stripUndefined(dto as Record<string, unknown>);
     const saved = await mergeInstallMetadataKey(this.prisma, storeDomain, WIDGET_CONFIG_METADATA_KEY, patch);
     if (!saved) throw new ConflictException('App not installed for this store');
-    return toWidgetConfig(saved);
+    const config = toWidgetConfig(saved);
+    await this.prisma.widgetConfigRevision.create({
+      data: {
+        shopId: install.shopId,
+        storeDomain,
+        config: config as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await this.pruneWidgetConfigRevisions(storeDomain);
+    return config;
+  }
+
+  private async pruneWidgetConfigRevisions(storeDomain: string): Promise<void> {
+    const keep = 20;
+    const stale = await this.prisma.widgetConfigRevision.findMany({
+      where: { storeDomain },
+      orderBy: { createdAt: 'desc' },
+      skip: keep,
+      select: { id: true },
+      take: 50,
+    });
+    if (stale.length === 0) return;
+    await this.prisma.widgetConfigRevision.deleteMany({ where: { id: { in: stale.map((row) => row.id) } } });
+  }
+
+  async listWidgetConfigRevisions(storeDomain: string): Promise<Array<{ id: string; createdAt: Date; config: WidgetConfig }>> {
+    const rows = await this.prisma.widgetConfigRevision.findMany({
+      where: { storeDomain },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    return rows.map((row) => ({ id: row.id, createdAt: row.createdAt, config: toWidgetConfig(row.config) }));
+  }
+
+  async restoreWidgetConfigRevision(
+    token: string,
+    storeDomain: string,
+    revisionId: string,
+  ): Promise<WidgetConfig> {
+    const revision = await this.prisma.widgetConfigRevision.findFirst({
+      where: { id: revisionId, storeDomain },
+    });
+    if (!revision) throw new NotFoundException('Revision not found');
+    const install = await this.resolveInstall(storeDomain);
+    const target = toWidgetConfig(revision.config);
+    const saved = await mergeInstallMetadataKey(
+      this.prisma,
+      storeDomain,
+      WIDGET_CONFIG_METADATA_KEY,
+      target as unknown as Record<string, unknown>,
+    );
+    if (!saved) throw new ConflictException('App not installed for this store');
+    const config = toWidgetConfig(saved);
+    await this.prisma.widgetConfigRevision.create({
+      data: {
+        shopId: install.shopId,
+        storeDomain,
+        config: config as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await this.pruneWidgetConfigRevisions(storeDomain);
+    return config;
   }
 
   async getSpamConfig(token: string, storeDomain: string): Promise<SpamConfig> {

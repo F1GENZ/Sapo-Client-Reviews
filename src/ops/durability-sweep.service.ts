@@ -4,6 +4,7 @@ import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
 import { PrismaService } from '../database/prisma.service';
 import { MediaService, type StoredMediaObject } from '../media/media.service';
+import { OutboundDispatcherService } from '../outbound/outbound-dispatcher.service';
 import { RedisService, type RedisLock } from '../redis/redis.service';
 import { ReviewService } from '../review/review.service';
 import { SapoService } from '../sapo/sapo.service';
@@ -35,12 +36,16 @@ export type SweepReport = {
   webhookRetry?: { attempted: number; succeeded: number; failed: number };
   metafields?: { processed: number; synced: number; failed: number; deferred: number };
   webhookRetention?: { deleted: number };
+  outboundDispatch?: { attempted: number; delivered: number; failed: number };
+  outboundReclaim?: { reclaimed: number };
   uninstallRetention?: { shops: number; purchases: number; events: number };
   mediaOrphans?: { scanned: number; deleted: number; kept: number };
   errors: string[];
 };
 
 type SweepStep =
+  | 'outboundReclaim'
+  | 'outboundDispatch'
   | 'webhookReclaim'
   | 'webhookRetry'
   | 'metafields'
@@ -65,6 +70,7 @@ export class DurabilitySweepService implements OnModuleInit, OnModuleDestroy {
     private readonly sapo: SapoService,
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
+    private readonly outbound: OutboundDispatcherService,
   ) {}
 
   onModuleInit(): void {
@@ -87,6 +93,8 @@ export class DurabilitySweepService implements OnModuleInit, OnModuleDestroy {
       lock = await this.redis.acquireLock(SWEEP_LOCK_KEY, SWEEP_LOCK_TTL_SECONDS).catch(() => null);
       if (!lock && this.redis.isConfigured) return { ...report, skipped: 'lock_held' };
 
+      await this.step(report, 'outboundReclaim', async () => ({ reclaimed: await this.outbound.reclaimStuck() }));
+      await this.step(report, 'outboundDispatch', () => this.outbound.dispatchDue());
       await this.step(report, 'webhookReclaim', () => this.webhooks.reclaimStalled());
       await this.step(report, 'webhookRetry', () => this.webhooks.retryDueFailed());
       await this.step(report, 'metafields', () =>

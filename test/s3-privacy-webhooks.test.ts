@@ -516,6 +516,7 @@ const makeRetentionSweep = (prisma: unknown): DurabilitySweepService =>
     cast({ resolveAccessToken: async () => 'token' }),
     cast<PrismaService>(prisma),
     cast<MediaService>({ storageConfigured: false }),
+    { reclaimStuck: async () => 0, dispatchDue: async () => ({ attempted: 0, delivered: 0, failed: 0 }) } as never,
   );
 
 const runSweepAt = async (sweep: DurabilitySweepService) => {

@@ -216,6 +216,7 @@ const makeDeletionHarness = (initial: StoredReview[]) => {
     fake<PurchaseStoreService>({}),
     fake<MetafieldSyncPendingService>({}),
     fake<MediaService>(media),
+    { enqueue: async () => 0 } as never,
   );
   Reflect.set(service, 'syncPublicSummary', async () => true);
   return { service, released, lookups };
@@ -302,6 +303,7 @@ const runSweep = async (rows: SweepRow[], keys: string[]) => {
     fake<SapoService>({ resolveAccessToken: async () => 'tok' }),
     fake<PrismaService>(prisma),
     fake<MediaService>(media),
+    { reclaimStuck: async () => 0, dispatchDue: async () => ({ attempted: 0, delivered: 0, failed: 0 }) } as never,
   );
   const report = await sweep.runOnce();
   assert.deepEqual(report.errors, []);
@@ -353,6 +355,7 @@ const makeSubmitHarness = (config: Record<string, unknown>) => {
     fake<PurchaseStoreService>({ hasPurchasedProduct: async (_s: string, _p: string, identity: unknown) => { purchaseCalls.push(identity); return true; } }),
     fake<MetafieldSyncPendingService>({}),
     fake<MediaService>({}),
+    { enqueue: async () => 0 } as never,
   );
   return { service, purchaseCalls };
 };

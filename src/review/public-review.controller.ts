@@ -26,6 +26,7 @@ import { clientFingerprint } from '../common/security/client-fingerprint';
 import { STORE_DOMAIN_RE, STRICT_EMAIL_RE, isValidPhone } from '../common/security/public-limits';
 import { sanitizePublicMedia, type PublicIdentity } from './public-review-input';
 import { normalizePhone } from '../purchase/purchase-store.service';
+import { buildSliderPayload, resolveSliderSettings } from './slider-payload';
 
 const IDENTITY_RATE_WINDOW_SECONDS = 3600;
 const IDENTITY_RATE_MAX = 30;
@@ -167,6 +168,30 @@ export class PublicReviewController {
       { page, limit, sort },
     );
     return { data: reviews };
+  }
+
+  @Get(':productId/slider')
+  async getSlider(
+    @Param('productId', NumericIdPipe) productId: string,
+    @Headers('x-store-domain') storeDomainHeader?: string,
+    @Query('storeDomain') storeDomainQuery?: string,
+  ) {
+    const storeDomain = this.extractStoreDomain(storeDomainHeader, storeDomainQuery);
+    const empty = { v: 1 as const, updated_at: Date.now(), items: [] };
+    if (!(await this.reviewService.isStoreServing(storeDomain))) {
+      return { data: empty };
+    }
+    const config = await this.reviewService.getPublicWidgetConfig(storeDomain).catch(() => null);
+    const settings = resolveSliderSettings(config);
+    if (!settings.enabled) {
+      return { data: empty };
+    }
+    const page = await this.reviewService.getPublicReviews(storeDomain, productId, {
+      page: 1,
+      limit: Math.max(30, settings.count),
+      sort: 'newest',
+    });
+    return { data: buildSliderPayload(page.items, settings.count, Date.now()) };
   }
 
   @Get(':productId/summary')

@@ -4,6 +4,7 @@ import { assertEncryptionKey, assertUsableSecret, isPlaceholderSecret } from './
 export type AppEnv = {
   NODE_ENV: 'development' | 'test' | 'production';
   PORT: number;
+  LISTEN_HOST: string;
   FRONTEND_URL: string;
   API_BASE_URL: string;
   CORS_ALLOWED_ORIGINS: string[];
@@ -49,6 +50,9 @@ export type AppEnv = {
 
   READINESS_TOKEN: string;
   BUILD_SHA: string;
+
+  GEMINI_API_KEY: string;
+  AI_MODEL: string;
 };
 
 type RawEnv = Record<string, string | undefined>;
@@ -183,12 +187,16 @@ export const loadEnv = (env: RawEnv = process.env): AppEnv => {
   const appEnv: AppEnv = {
     NODE_ENV,
     PORT: parseInteger(trim(env.PORT), 'PORT', errors, 3000, { min: 1, max: 65535 }),
+    LISTEN_HOST: trim(env.LISTEN_HOST) || '0.0.0.0',
     FRONTEND_URL: trim(env.FRONTEND_URL) || 'http://localhost:5173',
     API_BASE_URL: trim(env.API_BASE_URL) || 'http://localhost:3000',
     CORS_ALLOWED_ORIGINS: splitCsv(trim(env.CORS_ALLOWED_ORIGINS)),
     TRUST_PROXY: parseTrustProxyValue(trim(env.TRUST_PROXY) || 'false', errors),
     REQUEST_BODY_LIMIT: trim(env.REQUEST_BODY_LIMIT) || '1mb',
     WEBHOOK_BODY_LIMIT: trim(env.WEBHOOK_BODY_LIMIT) || '256kb',
+
+    GEMINI_API_KEY: trim(env.GEMINI_API_KEY),
+    AI_MODEL: trim(env.AI_MODEL) || 'gemini-2.5-flash',
 
     SAPO_CLIENT_ID: trim(env.SAPO_CLIENT_ID),
     SAPO_CLIENT_SECRET: trim(env.SAPO_CLIENT_SECRET),

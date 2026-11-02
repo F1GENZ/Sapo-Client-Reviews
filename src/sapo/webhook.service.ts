@@ -261,7 +261,7 @@ export class WebhookService {
         data: { status: 'processing', attempts: { increment: 1 } },
       });
     }
-    return this.runEvent(event.id, normalizedTopic, identity, payload);
+    return this.runEvent(event.id, normalizedTopic, identity, payload, new Date());
   }
 
   private async claimExisting(existing: {
@@ -301,9 +301,10 @@ export class WebhookService {
     normalizedTopic: string,
     identity: WebhookIdentity,
     payload: Record<string, unknown>,
+    receivedAt: Date,
   ): Promise<Record<string, unknown>> {
     try {
-      const result = await this.dispatch(normalizedTopic, identity, payload);
+      const result = await this.dispatch(normalizedTopic, identity, payload, receivedAt);
       await this.prisma.webhookEvent.update({
         where: { id: eventId },
         data: { status: result.ignored ? 'ignored' : 'processed', processedAt: new Date(), lastError: null, nextRetryAt: null },
@@ -320,10 +321,21 @@ export class WebhookService {
     topic: string,
     identity: WebhookIdentity,
     payload: Record<string, unknown>,
+    receivedAt: Date,
   ): Promise<Record<string, unknown>> {
     const { storeDomain } = identity;
     if (!storeDomain) return { ok: true, ignored: true, topic };
-    if (topic === 'app/uninstalled') return this.uninstallService.uninstall(storeDomain, payload);
+    if (topic === 'app/uninstalled') {
+      // Safety: an uninstall delivered before the shop authorized the app again describes a state that no longer exists.
+      const live = await this.prisma.appInstall.findUnique({
+        where: { storeDomain },
+        select: { installedAt: true },
+      });
+      if (live?.installedAt && receivedAt.getTime() < live.installedAt.getTime()) {
+        return { ok: true, ignored: true, topic, reason: 'uninstall_predates_install' };
+      }
+      return this.uninstallService.uninstall(storeDomain, payload);
+    }
 
     const storeScoped = topic === 'store/update' || topic.startsWith('products/') || topic.startsWith('orders/');
     if (!storeScoped) return { ok: true, ignored: true, topic };
@@ -466,6 +478,7 @@ export class WebhookService {
             row.normalizedTopic,
             { storeDomain: row.resolvedStoreDomain, domain: row.resolvedDomain },
             this.getPayload(row.payload),
+            row.receivedAt,
           );
           totals.succeeded += 1;
         } catch (error) {

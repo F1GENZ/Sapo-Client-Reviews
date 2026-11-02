@@ -50,6 +50,16 @@ export class PublicQnaController {
     return domain;
   }
 
+  @Get(':productId/summary')
+  async getSummary(
+    @Param('productId', NumericIdPipe) productId: string,
+    @Headers('x-store-domain') storeDomainHeader?: string,
+    @Query('storeDomain') storeDomainQuery?: string,
+  ) {
+    const storeDomain = this.extractStoreDomain(storeDomainHeader, storeDomainQuery);
+    return { data: await this.qnaService.getPublicSummary(storeDomain, productId) };
+  }
+
   @Get(':productId')
   async getQuestions(
     @Param('productId', NumericIdPipe) productId: string,

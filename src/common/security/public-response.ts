@@ -1,5 +1,5 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { map, type Observable } from 'rxjs';
 
 const REVIEW_FIELDS = [
@@ -73,8 +73,13 @@ export const sanitizePublicResponse = (path: string, body: unknown): unknown => 
 @Injectable()
 export class PublicResponseInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    const req = context.switchToHttp().getRequest<Request>();
+    const http = context.switchToHttp();
+    const req = http.getRequest<Request>();
     const path = req.path || '';
+    if (normalizeRequestPath(path).startsWith('/api/public') && typeof http.getResponse === 'function') {
+      const res = http.getResponse<Response>();
+      if (res && typeof res.setHeader === 'function') res.setHeader('Cache-Control', 'no-store');
+    }
     return next.handle().pipe(map((body) => sanitizePublicResponse(path, body)));
   }
 }

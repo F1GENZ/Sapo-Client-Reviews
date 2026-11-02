@@ -25,7 +25,14 @@ async function bootstrap() {
     );
   }
 
-  await app.listen(env.PORT);
+  process.on('unhandledRejection', (reason) => {
+    Logger.warn(
+      `Unhandled promise rejection: ${reason instanceof Error ? reason.message : String(reason)}`,
+      'Bootstrap',
+    );
+  });
+
+  await app.listen(env.PORT, env.LISTEN_HOST);
 }
 
 void bootstrap();

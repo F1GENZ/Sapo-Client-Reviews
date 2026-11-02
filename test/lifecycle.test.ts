@@ -39,6 +39,9 @@ import { StorefrontService } from '../src/storefront/storefront.service';
 const makeEnv = (overrides: Partial<AppEnv> = {}): AppEnv => ({
   NODE_ENV: 'test',
   PORT: 3333,
+  LISTEN_HOST: '127.0.0.1',
+  GEMINI_API_KEY: '',
+  AI_MODEL: 'gemini-2.5-flash',
   FRONTEND_URL: 'http://localhost:5173',
   API_BASE_URL: 'http://localhost:3333',
   CORS_ALLOWED_ORIGINS: ['http://localhost:5173'],

@@ -1,10 +1,12 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { catalogLabels } from '../catalog/product-label';
 import type { CatalogLabel } from '../catalog/product-label';
 import { PUBLIC_MAX_OFFSET } from '../common/security/public-limits';
+import { CatalogProductStoreService } from '../catalog/catalog-product-store.service';
+import { OutboundWebhookService } from '../outbound/outbound-webhook.service';
 import { QnaStoreService } from './qna-store.service';
 import type { QnaQuestionRecord } from './qna-store.service';
 import type { Question, QnaSummary } from './interfaces/qna.interface';
@@ -103,7 +105,14 @@ export class QnaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly qnaStore: QnaStoreService,
+    private readonly catalogStore: CatalogProductStoreService,
+    private readonly outbound: OutboundWebhookService,
   ) {}
+
+  // Safety: a merchant-facing write must not fail because a webhook fan-out failed; the delivery row is the durable record.
+  private emitOutbound(storeDomain: string, event: 'qna.created' | 'qna.answered', data: Record<string, unknown>): void {
+    void this.outbound.enqueue(storeDomain, event, data).catch(() => undefined);
+  }
 
   private async resolveInstall(storeDomain: string): Promise<{ shopId: string }> {
     const install = await this.prisma.appInstall.findUnique({
@@ -147,6 +156,13 @@ export class QnaService {
       status: 'pending',
       createdAt: now,
     });
+    this.emitOutbound(storeDomain, 'qna.created', {
+      productId,
+      questionId,
+      question: dto.question,
+      author: dto.author,
+      status: 'pending',
+    });
 
     return {
       id: questionId,
@@ -182,6 +198,7 @@ export class QnaService {
       answer,
       dto.answered_by || 'Shop',
     );
+    this.emitOutbound(storeDomain, 'qna.answered', { productId, questionId, answer });
 
     return toDomainQuestion(record);
   }
@@ -385,9 +402,28 @@ export class QnaService {
     productId: string,
     dto: CreateQuestionDto,
   ): Promise<Question> {
-    if (!(await this.resolveServingInstall(storeDomain))) {
+    const install = await this.resolveServingInstall(storeDomain);
+    if (!install) {
       throw new ConflictException({ code: 'store_not_serving', message: 'App not installed for this store' });
     }
+    const product = await this.catalogStore.getProduct(install.shopId, productId);
+    if (!product || product.deletedAt) {
+      throw new NotFoundException({ code: 'product_not_found', message: 'Product not found' });
+    }
     return this.submitQuestion(storeDomain, productId, dto);
+  }
+
+  async getPublicSummary(
+    storeDomain: string,
+    productId: string,
+  ): Promise<{ total: number; answered: number; unanswered: number }> {
+    const install = await this.resolveServingInstall(storeDomain);
+    if (!install) return { total: 0, answered: 0, unanswered: 0 };
+    const base: Prisma.QnaQuestionWhereInput = { shopId: install.shopId, productId, status: 'approved' };
+    const [total, answered] = await Promise.all([
+      this.prisma.qnaQuestion.count({ where: base }),
+      this.prisma.qnaQuestion.count({ where: { ...base, ...ANSWERED_WHERE } }),
+    ]);
+    return { total, answered, unanswered: Math.max(0, total - answered) };
   }
 }
