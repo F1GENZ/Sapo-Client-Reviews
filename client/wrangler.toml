@@ -1,0 +1,6 @@
+name = "f1genz-sapo-reviews-admin"
+compatibility_date = "2024-11-01"
+pages_build_output_dir = "dist"
+
+[vars]
+BACKEND_URL = "https://api-sapo-reviews.f1genz.dev"
