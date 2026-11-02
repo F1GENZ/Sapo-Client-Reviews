@@ -84,7 +84,7 @@ Metafield namespaces written by the app: shop metafields in `f1genz` (`config`, 
 
 ## Build & Verify
 
-- [x] B01 — `npm run verify` green (server typecheck/test/build), `npm run test:e2e` green, `npm --prefix client run test:unit` and `npm --prefix client run build` green (2026-11-02: verify 215/215, server HTTP contract 95/95 with a throwaway database, client unit 5/5, client build green, client journeys 44/44 and storefront widget 33/33; the `budget` script fails on a machine whose `client/node_modules` predates the lockfile and passes in CI, which installs with `npm ci`)
+- [x] B01 — `npm run verify` green (server typecheck/test/build), `npm run test:e2e` green, `npm --prefix client run test:unit` and `npm --prefix client run build` green (2026-11-02: verify 215/215, server HTTP contract 95/95 with a throwaway database, client unit 5/5, client build green, client journeys 44/44 and storefront widget 33/33; `npm run budget` fails on the operator machine — initial JS gzip 164.5 kB against a 120.0 kB budget, and the built asset hashes differ from the deployed build — while the same step is green in CI, which builds after `npm ci`; the local install was not made to reproduce the CI build, so the difference is unexplained rather than a budget the app exceeds)
 - [x] B02 — `prisma generate` succeeds
 - [x] B03 — `prisma migrate deploy` applies all migrations cleanly
 - [x] B04 — PM2 `ecosystem.config.cjs` starts the single `f1genz-sapo-api` process with `--env-file=.env`
