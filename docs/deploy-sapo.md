@@ -124,7 +124,13 @@ No CI deploys the client: Pages takes direct uploads built on the operator's mac
 
 ```bash
 npm --prefix client ci
-npm --prefix client run build
+cd client
+APP_BUILD_TIME= VITE_STOREFRONT_API_URL=https://api-sapo-reviews.f1genz.dev NODE_ENV=production npm run build
+```
+
+`client/.env` is gitignored and pinned a fake `APP_BUILD_TIME`, so a plain `npm run build` stamped the admin footer with `2026-04-01T11:09`. Exporting `APP_BUILD_TIME=` (empty) makes `vite.config.js` fall back to the real build time, and `VITE_STOREFRONT_API_URL` is what the "Hướng dẫn kỹ thuật" install snippet prints; without it the snippet shows `https://API_HOST`.
+
+```bash
 cd client
 CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN_F1GENZ CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID_F1GENZ \
   wrangler pages deploy dist --project-name f1genz-sapo-reviews-admin --branch master

@@ -2482,14 +2482,22 @@
     return value === null ? undefined : value;
   }
 
+  function pageMetaContent(property) {
+    const node = document.querySelector(`meta[property="${property}"]`);
+    return node ? node.getAttribute('content') || '' : '';
+  }
+
   function readSchemaAttributes(element) {
     return {
       name: schemaAttribute(element, ['product-name', 'name']),
       url: schemaAttribute(element, ['product-url', 'url']),
       images: schemaAttribute(element, ['product-image', 'image', 'images']),
       brand: schemaAttribute(element, ['brand', 'brand-name']),
-      price: schemaAttribute(element, ['price']),
-      currency: schemaAttribute(element, ['currency', 'price-currency'], 'VND'),
+      price:
+        schemaAttribute(element, ['price']) ||
+        pageMetaContent('product:price:amount') ||
+        pageMetaContent('og:price:amount'),
+      currency: schemaAttribute(element, ['currency', 'price-currency'], pageMetaContent('og:price:currency') || 'VND'),
       sku: schemaAttribute(element, ['sku']),
       mpn: schemaAttribute(element, ['mpn']),
       gtin: schemaAttribute(element, ['gtin', 'gtin13', 'gtin12', 'gtin8', 'barcode']),
@@ -2875,7 +2883,7 @@
       const ssrScripts = document.querySelectorAll('script[type="application/ld+json"]');
       for (let i = 0; i < ssrScripts.length; i++) {
         const content = ssrScripts[i].textContent || '';
-        if (content.includes('"@type"') && content.includes('"Product"') && content.includes('"aggregateRating"')) {
+        if (content.includes('"@type"') && content.includes('"Product"') && content.includes('"aggregateRating"') && content.includes('"offers"')) {
           return;
         }
       }

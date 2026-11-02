@@ -30,6 +30,7 @@ import {
 import { getErrorMessage } from "../../common/getErrorMessage";
 import { toast } from "../../common/toast";
 import {
+  App,
   Spin, Select, Tabs, Button, Empty, Modal, Form, Input, Tooltip, Checkbox,
   Breadcrumb, Typography, Flex, Badge, Pagination, Grid, Space,
 } from "antd";
@@ -117,6 +118,7 @@ const QnaPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
+  const { modal } = App.useApp();
   const [page, setPage] = useState(1);
   const [selectedProduct, setSelectedProduct] = useState(searchParams.get("product") || null);
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
@@ -322,6 +324,10 @@ const QnaPage = () => {
 
   const clearSelection = useCallback(() => setSelectedKeys(new Set()), []);
 
+  useEffect(() => {
+    clearSelection();
+  }, [activeTab, page, selectedProduct, clearSelection]);
+
   const selectedItems = useMemo(() =>
     Array.from(selectedKeys).map((key) => {
       const [productId, questionId] = String(key).split(":");
@@ -330,6 +336,20 @@ const QnaPage = () => {
 
   const runBulk = useCallback(async (action) => {
     if (!selectedItems.length) return;
+    if (action === "delete") {
+      const confirmed = await new Promise((resolve) => {
+        modal.confirm({
+          title: `Xoá vĩnh viễn ${selectedItems.length} câu hỏi?`,
+          content: "Câu hỏi đã xoá không thể khôi phục.",
+          okText: "Xoá",
+          okButtonProps: { danger: true },
+          cancelText: "Huỷ",
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!confirmed) return;
+    }
     setBulkBusy(true);
     try {
       const result = await bulkQuestions(action, selectedItems);
@@ -341,7 +361,7 @@ const QnaPage = () => {
     } finally {
       setBulkBusy(false);
     }
-  }, [clearSelection, invalidateAll, selectedItems]);
+  }, [clearSelection, invalidateAll, modal, selectedItems]);
 
   const handleExport = useCallback(async (format) => {
     setExporting(true);

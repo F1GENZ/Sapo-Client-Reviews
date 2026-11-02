@@ -326,6 +326,27 @@ function adminApi(state, overrides = {}) {
       }
       return ok(state.spamConfig);
     }
+    if (pathname === "/api/admin/reviews/bulk" && method === "POST") {
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      let updated = 0;
+      let deleted = 0;
+      let skipped = 0;
+      for (const item of items) {
+        const review = state.reviews.find((r) => r.id === item.reviewId && r.productId === String(item.productId));
+        if (!review) {
+          skipped += 1;
+          continue;
+        }
+        if (payload.action === "delete") {
+          state.reviews = state.reviews.filter((r) => r !== review);
+          deleted += 1;
+        } else {
+          review.status = payload.action === "approve" ? "approved" : payload.action;
+          updated += 1;
+        }
+      }
+      return ok({ requested: items.length, updated, deleted, skipped, failed: 0, summarySync: { synced: 0, queued: 0 } });
+    }
     if (pathname === "/api/admin/reviews" && method === "GET") return ok(reviewList(state, request.search));
     if (pathname === "/api/admin/reviews/import/dry-run" && method === "POST") {
       const lines = String(payload.body || "").trim().split("\n").filter(Boolean).length - 1;
@@ -366,6 +387,27 @@ function adminApi(state, overrides = {}) {
     }
 
     if (pathname === "/api/admin/qna" && method === "GET") return ok(questionList(state, request.search));
+    if (pathname === "/api/admin/qna/bulk" && method === "POST") {
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      let updated = 0;
+      let deleted = 0;
+      let skipped = 0;
+      for (const item of items) {
+        const question = state.questions.find((q) => q.id === item.questionId && q.productId === String(item.productId));
+        if (!question) {
+          skipped += 1;
+          continue;
+        }
+        if (payload.action === "delete") {
+          state.questions = state.questions.filter((q) => q !== question);
+          deleted += 1;
+        } else {
+          question.status = payload.action === "approve" ? "approved" : payload.action;
+          updated += 1;
+        }
+      }
+      return ok({ requested: items.length, updated, deleted, skipped, failed: 0, summarySync: { synced: 0, queued: 0 } });
+    }
     const qnaAction = /^\/api\/admin\/qna\/(\d+)\/([\w-]+)(?:\/(answer|status))?$/.exec(pathname);
     if (qnaAction) {
       const [, productId, id, action] = qnaAction;
@@ -673,6 +715,25 @@ async function main() {
       await page.waitForTimeout(300);
       assert(!requests.some((r) => r.method === "DELETE"), "DELETE sent after cancel");
       await expectText(page, "Khách Spam");
+    });
+
+    await scenario("V15", "bulk delete asks first, then reports the server's real counts", async ({ page, requests, state }) => {
+      await go(page, withStore("/reviews"));
+      const card = page.locator(".f1g-bulk-table__row", { hasText: "Khách Spam" });
+      await expectVisible(card, "spam review row");
+      await card.locator("label.ant-checkbox-wrapper").first().click();
+      await expectText(page, "Đã chọn 1 mục");
+      await page.getByRole("button", { name: "Xoá", exact: true }).first().click();
+      const confirmBox = page.locator(".ant-modal-confirm").last();
+      await expectVisible(confirmBox, "bulk delete confirmation");
+      assert.match(await confirmBox.innerText(), /Xoá vĩnh viễn 1 đánh giá\?/);
+      assert(!requests.some((r) => r.pathname === "/api/admin/reviews/bulk"), "bulk request sent before confirmation");
+      await confirmBox.locator(".ant-btn-primary").click();
+      await waitUntil(() => !state.reviews.some((r) => r.id === "rv-spam"));
+      const call = lastRequest(requests, "POST", (path) => path === "/api/admin/reviews/bulk");
+      assert.deepEqual(call && call.payload.action, "delete");
+      assert.deepEqual(call && call.payload.items, [{ productId: "1002", reviewId: "rv-spam" }]);
+      await expectText(page, "đã xoá 1 mục");
     });
 
     await scenario("V9", "a failed moderation call leaves the card unchanged and the page alive", async ({ page, requests, state }) => {

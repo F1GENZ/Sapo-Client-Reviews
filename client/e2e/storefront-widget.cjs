@@ -596,6 +596,44 @@ async function main() {
         await context.close();
       }
     });
+    await check("L7", "an SSR Product node without offers still gets a runtime schema with the meta price", async () => {
+      const rows = [review(701, { author: "Lan", rating: 5, content: "Tot" })];
+      const api = publicApi({ reviews: rows });
+      const { context, page } = await open(api, { ready: null, file: "ssr-product.html" });
+      try {
+        await page.waitForSelector("f1genz-product-schema script[type='application/ld+json']", { state: "attached", timeout: 8000 }).catch(() => null);
+        const nodes = await page.evaluate(() =>
+          Array.from(document.querySelectorAll("script[type='application/ld+json']")).map((node) => node.textContent || ""),
+        );
+        const product = nodes
+          .map((raw) => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
+          })
+          .filter((node) => node && node["@type"] === "Product")
+          .find((node) => node.offers);
+        assert.ok(product, "no runtime Product node with offers was mounted next to the SSR node");
+        assert.equal(product.offers.price, "392000");
+        assert.equal(product.offers.priceCurrency, "VND");
+        const ids = nodes
+          .map((raw) => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
+          })
+          .filter((node) => node && node["@type"] === "Product")
+          .map((node) => node["@id"]);
+        assert.equal(new Set(ids).size, 1, "the runtime node does not share the SSR @id, so search engines see two products");
+      } finally {
+        await context.close();
+      }
+    });
+
     await check("L2", "rating badge shows the server summary and its accessible name", async () => {
       const api = publicApi();
       const { context, page } = await open(api);
