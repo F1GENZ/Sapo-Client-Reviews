@@ -69,7 +69,7 @@ Metafield namespaces written by the app: shop metafields in `f1genz` (`config`, 
 
 - [x] D01 — Catalog backfill syncs products from Sapo API to Postgres
 - [ ] D02 — Order mirror fills `customer_purchases` from `orders/*` webhooks received after install (no backfill of earlier orders)
-- [x] D03 — `public_summary` metafield matches the Postgres summary (no drift)
+- [x] D03 — `public_summary` metafield matches the Postgres summary (no drift) — Sapo keeps metafields across a rebuild of the review database, so a product rated by earlier tests went on serving `avg-rating="4" review-count="3"` after the reviews were gone; `POST /api/admin/reviews/sync-metafield` with the product id cleared it (`withRating=0` on `/collections/all`), and it must be run for every product that still carries a rating before a store is handed over
 - [ ] D04 — Concurrent review status changes don't lose data (per-product Redis lock)
 - [x] D05 — A product with no live `catalog_products` row is refused by the public submit routes (`product_not_found`)
 
@@ -84,7 +84,7 @@ Metafield namespaces written by the app: shop metafields in `f1genz` (`config`, 
 
 ## Build & Verify
 
-- [x] B01 — `npm run verify` green (server typecheck/test/build), `npm run test:e2e` green, `npm --prefix client run test:unit` and `npm --prefix client run build` green (2026-11-02: verify 215/215, server HTTP contract 95/95 with a throwaway database, client unit 5/5, client build green, client journeys 44/44 and storefront widget 33/33; `npm run budget` fails on the operator machine — initial JS gzip 164.5 kB against a 120.0 kB budget, and the built asset hashes differ from the deployed build — while the same step is green in CI, which builds after `npm ci`; the local install was not made to reproduce the CI build, so the difference is unexplained rather than a budget the app exceeds)
+- [x] B01 — `npm run verify` green (server typecheck/test/build), `npm run test:e2e` green, `npm --prefix client run test:unit` and `npm --prefix client run build` green (2026-11-02: verify 215/215, server HTTP contract 95/95 with a throwaway database, client unit 5/5, client build green, client journeys 44/44 and storefront widget 33/33; budget green when the client is built the way CI builds it — `NODE_ENV=production npm run build` then `npm run budget` reports initial JS gzip 106.5 kB ≤ 120.0 kB, largest 165.4 kB ≤ 190.0 kB, storefront 27.8 kB ≤ 30.0 kB, CSS 4.6 kB ≤ 8.0 kB; a plain `npm run build` without `NODE_ENV=production` emits the development React bundle at 164.5 kB and fails the budget, which is what the first local attempt measured)
 - [x] B02 — `prisma generate` succeeds
 - [x] B03 — `prisma migrate deploy` applies all migrations cleanly
 - [x] B04 — PM2 `ecosystem.config.cjs` starts the single `f1genz-sapo-api` process with `--env-file=.env`
