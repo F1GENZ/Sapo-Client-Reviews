@@ -14,9 +14,10 @@ import {
   ArrayMaxSize,
   Matches,
   IsPositive,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { STRICT_EMAIL_RE } from '../../common/security/public-limits';
+import { STRICT_EMAIL_RE, isNonEmptyValue } from '../../common/security/public-limits';
 
 class MediaItemDto {
   @IsUrl({ protocols: ['https'], require_protocol: true })
@@ -50,7 +51,7 @@ export class UpdateReviewDto {
 
   @IsEmail()
   @Matches(STRICT_EMAIL_RE, { message: 'Email is invalid' })
-  @IsOptional()
+  @ValidateIf(isNonEmptyValue)
   @MaxLength(200)
   email?: string;
 

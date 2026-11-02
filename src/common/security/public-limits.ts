@@ -8,6 +8,9 @@ export const STORE_DOMAIN_RE =
 export const STRICT_EMAIL_RE =
   /^[A-Za-z0-9_%+-]+(?:\.[A-Za-z0-9_%+-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
 
+export const isNonEmptyValue = (_object: unknown, value: unknown): boolean =>
+  value !== undefined && value !== null && value !== '';
+
 export const PHONE_DIGITS_MIN = 8;
 export const PHONE_DIGITS_MAX = 15;
 

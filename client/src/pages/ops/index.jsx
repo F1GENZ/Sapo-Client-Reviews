@@ -41,7 +41,8 @@ import { shopQueryKeys } from "../../common/queryKeys";
 const { Title, Text } = Typography;
 
 const formatTime = (value) => {
-  const timestamp = Number(value || 0);
+  const numeric = Number(value);
+  const timestamp = numeric > 0 ? numeric : Date.parse(value);
   if (!timestamp) return "-";
   return new Date(timestamp).toLocaleString("vi-VN", {
     hour: "2-digit",
@@ -102,7 +103,7 @@ const ServiceCard = ({ title, ok, icon, description, detail }) => {
   const { token } = theme.useToken();
   return (
     <Card size="small" styles={{ body: { padding: 16, minHeight: 118 } }}>
-      <Flex justify="space-between" align="flex-start" gap={12}>
+      <Flex justify="space-between" align="flex-start" gap={12} wrap="wrap">
         <Space align="start" size={12}>
           <div
             style={{

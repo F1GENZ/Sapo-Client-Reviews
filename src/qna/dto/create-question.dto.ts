@@ -4,8 +4,9 @@ import {
   MaxLength,
   IsEmail,
   Matches,
+  ValidateIf,
 } from 'class-validator';
-import { STRICT_EMAIL_RE } from '../../common/security/public-limits';
+import { STRICT_EMAIL_RE, isNonEmptyValue } from '../../common/security/public-limits';
 
 export class CreateQuestionDto {
   @IsString()
@@ -18,7 +19,7 @@ export class CreateQuestionDto {
 
   @IsEmail()
   @Matches(STRICT_EMAIL_RE, { message: 'Email is invalid' })
-  @IsOptional()
+  @ValidateIf(isNonEmptyValue)
   email?: string;
 
   @IsString()
