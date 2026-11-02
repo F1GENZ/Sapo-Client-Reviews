@@ -24,6 +24,9 @@ Every variable the server reads is parsed and validated once at boot by `loadEnv
 | `TRUST_PROXY` | `false` | required, explicit | Must be present and non-empty in the production environment; `false` is a valid explicit value (app directly exposed). Accepted values: `false`/`0`, a hop count 1-10, or a comma list of proxy IPs, CIDRs, `loopback`, `linklocal`, `uniquelocal`. `true` and malformed values fail boot. In production with `false` the server logs a warning, because behind a proxy all clients share the proxy address and one rate-limit bucket. Set a hop count only after observing the real proxy chain. |
 | `REQUEST_BODY_LIMIT` | `1mb` | explicit | `<number>b`, `kb`, or `mb`. |
 | `WEBHOOK_BODY_LIMIT` | `256kb` | explicit | Same format; applied to `/api/oauth/install/webhooks`. |
+| `LISTEN_HOST` | `0.0.0.0` | `127.0.0.1` in production | Interface the HTTP server binds. Production sits behind `cloudflared`, which dials `http://localhost:3021`, so loopback is enough and keeps the port off the public interface. |
+| `GEMINI_API_KEY` | empty | empty | When empty, `POST /api/admin/ai/reply-suggestion` answers 503 instead of calling a model, and the admin hides the action. |
+| `AI_MODEL` | `gemini-2.5-flash` | set to a model the key can reach | Model id used by the reply suggestion. |
 
 ## Sapo OAuth and webhooks
 
