@@ -1,3 +1,5 @@
+const buildSha = process.env.BUILD_SHA;
+
 module.exports = {
   apps: [
     {
@@ -14,8 +16,11 @@ module.exports = {
       kill_timeout: 10000,
       max_memory_restart: '512M',
       time: true,
+      // PM2 keeps any variable it started the app with; a BUILD_SHA exported only by the deploy
+      // shell survives every later reload and /readyz then reports the first commit forever.
       env: {
         NODE_ENV: 'production',
+        ...(buildSha ? { BUILD_SHA: buildSha } : {}),
       },
     },
   ],

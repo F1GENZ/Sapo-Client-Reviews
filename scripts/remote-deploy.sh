@@ -26,8 +26,11 @@ fi
 # /readyz answers 200 with a status body once the token matches; only
 # status "down" (Redis or database unreachable) fails the deploy. A
 # "degraded" status reflects failures recorded before this deploy.
+# With EXPECT_SHA set the probe also requires the running build to name the
+# commit just deployed: PM2 can keep an older BUILD_SHA, and a stale sha makes
+# every later rollback decision read the wrong build.
 probe_ready() {
-  PROBE_URL="http://127.0.0.1:${PORT_VALUE}/readyz" PROBE_TOKEN="$READINESS_VALUE" node -e '
+  PROBE_URL="http://127.0.0.1:${PORT_VALUE}/readyz" PROBE_TOKEN="$READINESS_VALUE" PROBE_SHA="${1:-}" node -e '
     const http = require("http");
     const req = http.get(
       process.env.PROBE_URL,
@@ -39,8 +42,15 @@ probe_ready() {
         res.on("end", () => {
           if (res.statusCode !== 200) process.exit(1);
           try {
-            const status = JSON.parse(body).status;
-            process.exit(status === "ok" || status === "degraded" ? 0 : 1);
+            const payload = JSON.parse(body);
+            const healthy = payload.status === "ok" || payload.status === "degraded";
+            const expected = process.env.PROBE_SHA;
+            if (!healthy) process.exit(1);
+            if (expected && payload.build !== expected) {
+              console.error(`/readyz reports build ${payload.build}, expected ${expected}`);
+              process.exit(2);
+            }
+            process.exit(0);
           } catch {
             process.exit(1);
           }
@@ -82,16 +92,35 @@ fi
 mv dist.next dist
 rm -rf dist.old
 
-BUILD_SHA="$(cat DEPLOY_COMMIT)" pm2 startOrReload ecosystem.config.cjs --update-env
+DEPLOYED_SHA="$(cat DEPLOY_COMMIT)"
+BUILD_SHA="$DEPLOYED_SHA" pm2 startOrReload ecosystem.config.cjs --update-env
 
 api_ready=""
+mismatch=""
+mismatch_count=0
 for _ in $(seq 1 20); do
-  if probe_ready; then
-    api_ready="yes"
-    break
-  fi
+  rc=0
+  probe_ready "$DEPLOYED_SHA" || rc=$?
+  case "$rc" in
+    0)
+      api_ready="yes"
+      break
+      ;;
+    2)
+      mismatch_count=$((mismatch_count + 1))
+      if [ "$mismatch_count" -ge 3 ]; then
+        mismatch="yes"
+        break
+      fi
+      ;;
+  esac
   sleep 3
 done
+
+if [ -n "$mismatch" ] && [ -z "$api_ready" ]; then
+  echo "/readyz never reported build $DEPLOYED_SHA; the PM2 environment still holds another commit. The code is live, fix the environment instead of rolling back." >&2
+  exit 1
+fi
 
 if [ -z "$api_ready" ]; then
   echo "Post-reload /readyz probe failed; reverting to dist.prev" >&2
