@@ -16,6 +16,7 @@ async function bootstrap() {
 
   applyHttpHardening(instance, env, app.get(IngressRateLimitService));
   app.useGlobalInterceptors(new PublicResponseInterceptor());
+  app.enableShutdownHooks();
 
   if (env.NODE_ENV === 'production' && env.TRUST_PROXY === false) {
     Logger.warn(

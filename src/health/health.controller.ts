@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'crypto';
 import { Controller, Get, Headers, Inject, Logger, UnauthorizedException } from '@nestjs/common';
 import { APP_ENV } from '../config/app-config.module';
 import type { AppEnv } from '../config/env.schema';
@@ -23,7 +24,10 @@ export class HealthController {
   @Get('/readyz')
   async readyz(@Headers('authorization') authorization?: string): Promise<Record<string, unknown>> {
     const token = authorization?.replace(/^Bearer\s+/i, '') || '';
-    if (!this.env.READINESS_TOKEN || token !== this.env.READINESS_TOKEN) {
+    const expected = this.env.READINESS_TOKEN;
+    const providedDigest = createHash('sha256').update(token).digest();
+    const expectedDigest = createHash('sha256').update(expected).digest();
+    if (!expected || !timingSafeEqual(providedDigest, expectedDigest)) {
       throw new UnauthorizedException('Invalid readiness token');
     }
 
