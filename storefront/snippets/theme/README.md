@@ -8,6 +8,7 @@ Copy the blocks from `f1genz-sapo-widget.bwt` into the theme. The admin Dev guid
 | 2. `<f1genz-reviews>` | product template | reviews + Q&A widget |
 | 3. `<f1genz-qna-panel>` | product template | separate Q&A panel (use instead of 2 when reviews and Q&A sit apart) |
 | 4. `<f1genz-rating-badge>` | product card / collection loop | rating badge; score fetched in batches from the API |
+| 5. `<f1genz-curated-slider>` | product page (optional) | horizontal rail of the shop's best approved reviews; the merchant controls it with `curatedSliderEnabled` / `curatedSliderCount` (5–15) in Cấu hình → Hiển thị, and the server enforces those values. The `count` attribute is only a hint, never a way to bypass the merchant setting. |
 | 4b. SSR badge variant | same | optional, use instead of 4; prints the scalar metafields below |
 
 SEO JSON-LD is `storefront/theme/f1genz-product-schema.bwt` (`{% include 'f1genz-product-schema' %}`); see its README.

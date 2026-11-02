@@ -87,6 +87,8 @@
   const DEFAULT_CONFIG = {
     formPhoneMode: 'optional',
     reviewQnaDisplayMode: 'tabs',
+    curatedSliderEnabled: true,
+    curatedSliderCount: 15,
   };
 
   const RENDER_DEFAULTS = {
@@ -690,6 +692,26 @@
     return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" style="color:${escapeHTML(color)}"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`;
   }
 
+  function relativeLuminance(hex) {
+    const value = String(hex || '').trim();
+    if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) return null;
+    const full = value.length === 4
+      ? `#${value[1]}${value[1]}${value[2]}${value[2]}${value[3]}${value[3]}`
+      : value;
+    const channels = [1, 3, 5].map((offset) => {
+      const channel = parseInt(full.slice(offset, offset + 2), 16) / 255;
+      return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  }
+
+  function readableTextOn(background) {
+    const luminance = relativeLuminance(background);
+    if (luminance === null) return '#fff';
+    const contrastWithWhite = 1.05 / (luminance + 0.05);
+    return contrastWithWhite >= 4.5 ? '#fff' : RENDER_DEFAULTS.textColor;
+  }
+
   function renderStars(config, rating, size) {
     let html = '';
     for (let index = 1; index <= 5; index += 1) {
@@ -985,6 +1007,7 @@
       const radiusXs = Math.max(0, Math.round(radius * 0.5));
 
       this.style.setProperty('--f1genz-sapo-review-accent', config.accentColor || RENDER_DEFAULTS.accentColor);
+      this.style.setProperty('--f1genz-sapo-review-on-accent', readableTextOn(config.accentColor || RENDER_DEFAULTS.accentColor));
       this.style.setProperty('--f1genz-sapo-review-star-color', config.starColor || RENDER_DEFAULTS.starColor);
       this.style.setProperty('--f1genz-sapo-review-star-empty', config.starBgColor || RENDER_DEFAULTS.starBgColor);
       this.style.setProperty('--f1genz-sapo-review-text', config.textColor || RENDER_DEFAULTS.textColor);
@@ -3043,6 +3066,63 @@
     scan(document);
   }
 
+  class F1GCuratedSliderElement extends F1GBaseElement {
+    async initialize() {
+      if (this.config.curatedSliderEnabled === false) {
+        this.innerHTML = '';
+        return;
+      }
+      if (!this.apiUrl || !this.storeDomain || !this.productId) {
+        this.innerHTML = '';
+        return;
+      }
+      const attributeCount = Number(this.getAttribute('count'));
+      const count = Number.isFinite(attributeCount) && attributeCount > 0
+        ? Math.max(5, Math.min(15, Math.trunc(attributeCount)))
+        : Math.max(5, Math.min(15, Number(this.config.curatedSliderCount) || 15));
+      try {
+        const payload = await fetchJSON(
+          `${this.apiUrl}/api/public/reviews/${encodeURIComponent(this.productId)}/slider?limit=${count}`,
+          this.storeDomain,
+        );
+        const items = payload && Array.isArray(payload.items) ? payload.items : [];
+        this.render(items);
+      } catch {
+        this.innerHTML = '';
+      }
+    }
+
+    render(items) {
+      if (!items.length) {
+        this.innerHTML = '';
+        return;
+      }
+      const cards = items.map((item) => {
+        const media = typeof item.m === 'string' && /^https?:\/\//.test(item.m)
+          ? `<img class="f1genz-sapo-review-slider__media" src="${escapeHTML(item.m)}" alt="" width="320" height="240" loading="lazy" decoding="async">`
+          : '';
+        const title = item.t ? `<p class="f1genz-sapo-review-slider__title">${escapeHTML(item.t)}</p>` : '';
+        const verified = Number(item.v) === 1
+          ? '<span class="f1genz-sapo-review-slider__verified">Đã mua hàng</span>'
+          : '';
+        return `<li class="f1genz-sapo-review-slider__item">${media}<div class="f1genz-sapo-review-slider__body"><div class="f1genz-sapo-review-slider__stars">${renderStars(this.config, Number(item.r) || 5, 14)}</div>${title}<p class="f1genz-sapo-review-slider__content">${escapeHTML(String(item.c || ''))}</p><div class="f1genz-sapo-review-slider__meta"><span class="f1genz-sapo-review-slider__author">${escapeHTML(String(item.a || 'Khách hàng'))}</span>${verified}</div></div></li>`;
+      }).join('');
+      this.innerHTML = `<section class="f1genz-sapo-review-slider" aria-label="Đánh giá nổi bật">
+        <div class="f1genz-sapo-review-slider__head"><h3 class="f1genz-sapo-review-slider__heading">Đánh giá nổi bật</h3><div class="f1genz-sapo-review-slider__nav"><button type="button" class="f1genz-sapo-review-slider__arrow" data-slider-step="-1" aria-label="Đánh giá trước">‹</button><button type="button" class="f1genz-sapo-review-slider__arrow" data-slider-step="1" aria-label="Đánh giá sau">›</button></div></div>
+        <ul class="f1genz-sapo-review-slider__track">${cards}</ul></section>`;
+      const track = this.querySelector('.f1genz-sapo-review-slider__track');
+      this.querySelectorAll('[data-slider-step]').forEach((button) => {
+        button.addEventListener('click', () => {
+          if (!(track instanceof HTMLElement)) return;
+          const step = Number(button.getAttribute('data-slider-step')) || 1;
+          const card = track.querySelector('.f1genz-sapo-review-slider__item');
+          const width = card instanceof HTMLElement ? card.getBoundingClientRect().width + 12 : 300;
+          track.scrollBy({ left: step * width, behavior: 'smooth' });
+        });
+      });
+    }
+  }
+
   if (!customElements.get('f1genz-reviews-panel')) {
     customElements.define('f1genz-reviews-panel', F1GReviewsElement);
   }
@@ -3061,6 +3141,10 @@
 
   if (!customElements.get('f1genz-product-schema')) {
     customElements.define('f1genz-product-schema', F1GProductSchemaElement);
+  }
+
+  if (!customElements.get('f1genz-curated-slider')) {
+    customElements.define('f1genz-curated-slider', F1GCuratedSliderElement);
   }
 
   window.F1GENZStorefront = Object.assign(window.F1GENZStorefront || {}, {
