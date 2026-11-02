@@ -12,6 +12,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Space,
   Spin,
   Switch,
@@ -278,23 +279,18 @@ const WebhooksPage = () => {
                       Lượt gửi
                     </Button>
                   </Tooltip>
-                  <Button
-                    size="small"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => {
-                      Modal.confirm({
-                        title: "Xoá webhook này?",
-                        content: `Hệ thống sẽ ngừng gửi sự kiện tới ${endpoint.url}. Hành động không hoàn tác được.`,
-                        okText: "Xoá",
-                        okButtonProps: { danger: true },
-                        cancelText: "Hủy",
-                        onOk: () => deleteMutation.mutate(endpoint.id),
-                      });
-                    }}
+                  <Popconfirm
+                    title="Xoá webhook này?"
+                    description={`Hệ thống sẽ ngừng gửi sự kiện tới ${endpoint.url}. Hành động không hoàn tác được.`}
+                    okText="Xoá"
+                    okButtonProps={{ danger: true }}
+                    cancelText="Hủy"
+                    onConfirm={() => deleteMutation.mutate(endpoint.id)}
                   >
-                    Xoá
-                  </Button>
+                    <Button size="small" danger icon={<DeleteOutlined />}>
+                      Xoá
+                    </Button>
+                  </Popconfirm>
                 </Space>
               }
             >

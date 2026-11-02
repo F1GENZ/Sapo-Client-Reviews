@@ -1228,28 +1228,12 @@ const SettingsPage = () => {
     onError: (error) => toast.error(getErrorMessage(error, "Lưu thất bại")),
   });
 
-  const handleRestoreDefault = useCallback(() => {
-    Modal.confirm({
-      title: "Khôi phục toàn bộ về mặc định?",
-      content: (
-        <div>
-          <p style={{ marginTop: 0 }}>Áp dụng cho toàn bộ 6 tab cấu hình widget và phần chống spam:</p>
-          <ul style={{ paddingLeft: 20, margin: "0 0 8px" }}>
-            <li>Hiển thị, Form gửi, Tin cậy, Hỏi đáp, Duyệt &amp; Spam, Giao diện</li>
-            <li>Độ dài nội dung tối đa và danh sách từ khoá bị chặn</li>
-          </ul>
-          <p style={{ margin: 0 }}>Thay đổi chỉ có hiệu lực sau khi bấm “Lưu thay đổi”.</p>
-        </div>
-      ),
-      okText: "Đưa về mặc định",
-      cancelText: "Hủy",
-      okButtonProps: { danger: true },
-      onOk: () => {
-        setLocalConfig({ ...defaultConfig });
-        setSpamDraft({});
-      },
-    });
-  }, []);
+  const handleRestoreDefault = useCallback(() => setResetOpen(true), []);
+  const confirmRestoreDefault = useCallback(() => {
+    setLocalConfig({ ...defaultConfig });
+    setSpamDraft({});
+    setResetOpen(false);
+  }, [defaultConfig]);
 
   /* ── Spam config ── */
   const { data: spamConfig, isLoading: spamLoading } = useQuery({
@@ -1258,6 +1242,7 @@ const SettingsPage = () => {
     enabled: !!storeDomain,
   });
   const [spamDraft, setSpamDraft] = useState(null);
+  const [resetOpen, setResetOpen] = useState(false);
   const spam = spamDraft ?? spamConfig ?? {};
   const us = (key, value) => setSpamDraft((prev) => ({ ...(prev ?? spamConfig ?? {}), [key]: value }));
 
@@ -1848,9 +1833,16 @@ const SettingsPage = () => {
         }
         .f1g-settings-tabs-scroll .ant-tabs-nav {
           flex-shrink: 0;
+          padding-inline: 6px;
           margin: 0 !important;
           background: #fff;
           z-index: 2;
+        }
+        .f1g-settings-tabs-scroll .ant-tabs-tab {
+          padding-inline: 4px;
+        }
+        .f1g-settings-tabs-scroll .ant-tabs-tab + .ant-tabs-tab {
+          margin-left: 0;
         }
         .f1g-settings-tabs-scroll .ant-tabs-content-holder {
           flex: 1;
@@ -1947,10 +1939,8 @@ const SettingsPage = () => {
         .f1g-settings-tabs-scroll .ant-tabs-content-holder {
           overscroll-behavior: contain;
         }
-        @media (max-width: 1199px) {
-          .f1g-settings-tabs-scroll .ant-tabs-tab .anticon {
-            display: none;
-          }
+        .f1g-settings-tabs-scroll .ant-tabs-tab .anticon {
+          display: none;
         }
         .f1g-settings-preview-card {
           display: flex;
@@ -2033,7 +2023,7 @@ const SettingsPage = () => {
               activeKey={activeTabKey}
               size="small"
               onChange={handleTabChange}
-              tabBarGutter={16}
+              tabBarGutter={8}
               items={settingsTabItems}
               more={{ icon: <span aria-hidden="true">…</span> }}
             />
@@ -2060,6 +2050,23 @@ const SettingsPage = () => {
               </div>
             </div>
           </Card>
+          <Modal
+            open={resetOpen}
+            title="Khôi phục toàn bộ về mặc định?"
+            okText="Đưa về mặc định"
+            cancelText="Hủy"
+            okButtonProps={{ danger: true }}
+            onOk={confirmRestoreDefault}
+            onCancel={() => setResetOpen(false)}
+            destroyOnHidden
+          >
+            <p style={{ marginTop: 0 }}>Áp dụng cho toàn bộ 6 tab cấu hình widget và phần chống spam:</p>
+            <ul style={{ paddingLeft: 20, margin: "0 0 8px" }}>
+              <li>Hiển thị, Form gửi, Tin cậy, Hỏi đáp, Duyệt &amp; Spam, Giao diện</li>
+              <li>Độ dài nội dung tối đa và danh sách từ khoá bị chặn</li>
+            </ul>
+            <p style={{ margin: 0 }}>Thay đổi chỉ có hiệu lực sau khi bấm “Lưu thay đổi”.</p>
+          </Modal>
           </Spin>
         </Col>
 

@@ -145,7 +145,7 @@ function seedState() {
     ],
     widgetConfig: { titleText: "Đánh giá sản phẩm", showTitle: true, showDate: true, showFilter: true, showSort: true },
     spamConfig: { blockedWords: [], maxContentLength: 5000 },
-    persisted: { widgetPuts: [], spamPuts: [], dropped: [] },
+    persisted: { widgetPuts: [], spamPuts: [], imports: [], dropped: [] },
     handoffs: new Map(),
     exchanges: 0,
   };
@@ -327,6 +327,15 @@ function adminApi(state, overrides = {}) {
       return ok(state.spamConfig);
     }
     if (pathname === "/api/admin/reviews" && method === "GET") return ok(reviewList(state, request.search));
+    if (pathname === "/api/admin/reviews/import/dry-run" && method === "POST") {
+      const lines = String(payload.body || "").trim().split("\n").filter(Boolean).length - 1;
+      return ok({ created: lines, updated: 0, skipped: 0, failed: 0, total: lines, errors: [], runId: "dry-1" });
+    }
+    if (pathname === "/api/admin/reviews/import" && method === "POST") {
+      state.persisted.imports.push(payload);
+      const lines = String(payload.body || "").trim().split("\n").filter(Boolean).length - 1;
+      return ok({ created: lines, updated: 0, skipped: 0, failed: 0, total: lines, errors: [], runId: "import-1" });
+    }
 
     const statsOfProduct = /^\/api\/admin\/reviews\/(\d+)\/stats$/.exec(pathname);
     if (statsOfProduct) {
@@ -870,6 +879,39 @@ async function main() {
       );
       assert.equal(state.spamConfig.maxContentLength, 1200);
       assert.equal(state.widgetConfig.autoApprove, true);
+    });
+
+    await scenario("S8", "reset asks first, lists what it touches, and cancelling keeps the draft", async ({ page }) => {
+      await go(page, withStore("/settings"));
+      await page.getByRole("switch", { name: "Hiển thị tiêu đề đánh giá" }).click();
+      await expectText(page, "Có thay đổi chưa lưu");
+      await page.getByRole("button", { name: "Khôi phục toàn bộ mặc định" }).click();
+      const dialog = page.locator(".ant-modal-content", { hasText: "Khôi phục toàn bộ về mặc định?" });
+      await expectVisible(dialog, "reset dialog");
+      await expectText(page, "Duyệt & Spam, Giao diện");
+      await expectText(page, "Lưu thay đổi");
+      await dialog.getByRole("button", { name: "Hủy" }).click();
+      await expectText(page, "Có thay đổi chưa lưu");
+      assert.equal(await page.getByRole("switch", { name: "Hiển thị tiêu đề đánh giá" }).isChecked(), false, "cancelling must keep the edited switch");
+    });
+
+    await scenario("S7", "import checks the file, shows the row summary, and only then writes", async ({ page, requests, state }) => {
+      await go(page, withStore("/reviews"));
+      await page.getByRole("button", { name: "Nhập CSV/JSON" }).click();
+      const area = page.locator(".ant-modal-content textarea");
+      await expectVisible(area, "import textarea");
+      await area.fill("product_id,review_id,rating,author,content,status\n1001,imp-1,5,Khách Nhập,Một dòng nhập,approved\n1001,imp-2,4,Khách Hai,Dòng thứ hai,approved");
+      await page.getByRole("button", { name: "Kiểm tra dữ liệu" }).click();
+      await waitUntil(() => requests.some((r) => r.pathname === "/api/admin/reviews/import/dry-run"));
+      const dry = requests.find((r) => r.pathname === "/api/admin/reviews/import/dry-run");
+      assert.equal(dry.payload?.dryRun, true, "dry-run request must be flagged as a check");
+      assert.equal(dry.payload?.format, "csv");
+      await expectText(page, "Tạo mới: 2");
+      await expectText(page, "Lỗi: 0");
+      await page.getByRole("button", { name: "Nhập 2 mục" }).click();
+      await waitUntil(() => state.persisted.imports.length === 1);
+      assert.equal(state.persisted.imports[0].dryRun, false, "apply must not be flagged as a check");
+      assert.equal(await page.locator(".ant-modal-content").count(), 1, "the dialog stays open to show what was written");
     });
 
     await scenario("S6", "switching tabs keeps the draft, marks the tab, and one save persists every tab", async ({ page, state }) => {
