@@ -130,6 +130,8 @@ CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN_F1GENZ CLOUDFLARE_ACCOUNT_ID=$CLOUDFL
   wrangler pages deploy dist --project-name f1genz-sapo-reviews-admin --branch master
 ```
 
+Run it from `client/`, never from the repo root with `dist` as the directory: wrangler discovers Pages Functions in `./functions` and reads `BACKEND_URL` from `./wrangler.toml` relative to the working directory, so a root-level deploy silently drops the `/api/*` proxy and the SPA renders empty.
+
 wrangler on the operator's machine is logged in to a different Cloudflare account through OAuth and ignores the `_F1GENZ` suffixed variables, so map them as above and check `wrangler whoami` shows account `dc25380a46ad0853b9b0d98ce7a74270` first. `client/wrangler.toml` carries the project name, `pages_build_output_dir = "dist"` and `BACKEND_URL = "https://api-sapo-reviews.f1genz.dev"`.
 
 What ships with the build: `public/_headers` (`Content-Security-Policy: frame-ancestors https://*.mysapo.net` so only Sapo admin can embed the SPA, `X-Content-Type-Options: nosniff`, a restrictive `Permissions-Policy`, immutable caching for `/assets/*`), `public/_routes.json` (only `/api/*` runs the Function) and `functions/api/[[path]].js` (proxies `/api/*` to `BACKEND_URL` and sets `X-Forwarded-Host`).
